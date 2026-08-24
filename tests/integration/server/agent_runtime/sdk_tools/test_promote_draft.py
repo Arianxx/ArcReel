@@ -446,6 +446,37 @@ async def test_promote_draft_reports_promotion_not_split(fake_ctx: ToolContext, 
     assert "晋升" in out["content"][0]["text"]
 
 
+async def test_cancelled_reference_step1_promotion_finishes_commit_and_cleanup(
+    fake_ctx: ToolContext, monkeypatch
+) -> None:
+    _rv_source(fake_ctx)
+    await _run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[不存在的人] 出场")])
+    envelope = _read_rv_quarantine(fake_ctx)
+    envelope["content"]["units"][0]["text"] = "@[张三] 起身"
+    _rv_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+    started = threading.Event()
+    release = threading.Event()
+    original_write = script_review.write_step1
+
+    def blocked_write(*args, **kwargs):
+        started.set()
+        assert release.wait(timeout=2)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(script_review, "write_step1", blocked_write)
+    promotion = asyncio.create_task(_promote(fake_ctx))
+    assert await asyncio.to_thread(started.wait, 1)
+    promotion.cancel()
+    await asyncio.sleep(0)
+    assert not promotion.done()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(promotion, timeout=1)
+    assert _rv_step1_path(fake_ctx).exists()
+    assert not _rv_quarantine_path(fake_ctx).exists()
+
+
 async def test_writing_reference_step1_clears_stale_step2_quarantine(fake_ctx: ToolContext, monkeypatch) -> None:
     """step1 一变即清掉在场的 step2 草稿：它以旧 step1 为 diff 基底，留着就永远晋升不了。"""
     _rv_source(fake_ctx)

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from lib import script_review
 from lib.artifact_manifest import ArtifactBasis
+from lib.asyncio_utils import run_sync_transaction
 from lib.config.resolver import ConfigResolver
 from lib.draft_quarantine import (
     DOC_TYPE_TO_QUARANTINE_KIND,
@@ -222,6 +223,23 @@ async def revalidate_reference_step1_draft(
     return ReferenceDraftRevalidation(violations, flat_units, split_caps, schema_failed=False, basis=step1_basis)
 
 
+def _commit_reference_step1(
+    project_path: Path,
+    episode: int,
+    content: dict[str, Any],
+    expected_fingerprint: Any,
+    basis: ArtifactBasis | None,
+) -> None:
+    script_review.write_step1(
+        project_path,
+        episode,
+        content,
+        expected_fingerprint=expected_fingerprint,
+        basis=basis,
+    )
+    clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
+
+
 async def _promote_reference_step1(ctx: DraftContext, episode: int, draft: QuarantinedDraft) -> None:
     """按产出时那套校验器全量重判 step1 草稿，通过则晋升为正式 step1 并清除草稿。"""
     project_path = ctx.project_path
@@ -266,17 +284,14 @@ async def _promote_reference_step1(ctx: DraftContext, episode: int, draft: Quara
         draft.meta["base_fingerprint"] if "base_fingerprint" in draft.meta else script_review.UNCHECKED_FINGERPRINT
     )
     try:
-        await asyncio.to_thread(
-            script_review.write_step1,
+        await run_sync_transaction(
+            _commit_reference_step1,
             project_path,
             episode,
             {"units": units},
-            expected_fingerprint=expected,
-            basis=revalidation.basis,
+            expected,
+            revalidation.basis,
         )
-        # 落盘成功后才清草稿：写盘失败（含冲突）时草稿还在，改完重试晋升即可，不会两头皆空。
-        # 调用方持有草稿锁，正式写入到清理之间没有其它草稿操作可以插队。
-        clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
     except script_review.Step1WriteConflict as conflict:
         raise DraftWorkflowError(
             "formal_revision_conflict",

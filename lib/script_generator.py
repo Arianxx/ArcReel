@@ -29,6 +29,7 @@ from lib.artifact_provenance import (
     build_episode_script_basis,
     project_ad_episode_script_inputs,
 )
+from lib.asyncio_utils import run_sync_transaction
 from lib.backend_assembly.specs import get_provider_spec
 from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.resolver import (
@@ -568,7 +569,7 @@ class ScriptGenerator:
                     reference_step1, response_text, episode, max_refs=reference_max_refs
                 )
             except DraftViolation as exc:
-                raise await asyncio.to_thread(
+                raise await run_sync_transaction(
                     self._quarantine_reference_step2,
                     episode,
                     response_text,
@@ -592,7 +593,7 @@ class ScriptGenerator:
         except DraftViolation as exc:
             if reference_step1 is None:
                 raise
-            raise await asyncio.to_thread(
+            raise await run_sync_transaction(
                 self._quarantine_reference_step2,
                 episode,
                 response_text,
@@ -616,7 +617,7 @@ class ScriptGenerator:
         except ScriptWriteConflict as exc:
             if reference_step1 is None:
                 raise
-            raise await asyncio.to_thread(
+            raise await run_sync_transaction(
                 self._quarantine_reference_step2,
                 episode,
                 response_text,

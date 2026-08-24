@@ -18,6 +18,7 @@ from lib import script_review
 from lib.artifact_manifest import ArtifactBasis
 from lib.artifact_provenance import Step1PromptVariant, build_step1_request
 from lib.asset_types import BUCKET_KEY, asset_name_comparison_key, normalize_asset_bucket
+from lib.asyncio_utils import run_sync_transaction
 from lib.config.resolver import ConfigResolver
 from lib.content_digest import prefixed_sha256_file
 from lib.custom_provider.duration_presets import DEFAULT_FALLBACK
@@ -144,6 +145,23 @@ def _quarantine_formal_generation_conflict(
         ],
         meta={"source": source, "base_fingerprint": expected},
     )
+
+
+def _commit_generated_reference_step1(
+    project_path: Path,
+    episode: int,
+    content: dict[str, Any],
+    expected_fingerprint: str | None,
+    basis: ArtifactBasis,
+) -> None:
+    script_review.write_step1(
+        project_path,
+        episode,
+        content,
+        expected_fingerprint=expected_fingerprint,
+        basis=basis,
+    )
+    clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
 
 
 def _instructions(value: Any) -> str | None:
@@ -1096,15 +1114,14 @@ async def generate_reference_step1(
         async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             _assert_draft_revision(draft_path, draft_baseline)
             try:
-                await asyncio.to_thread(
-                    script_review.write_step1,
+                await run_sync_transaction(
+                    _commit_generated_reference_step1,
                     project_path,
                     episode,
                     {"units": raw_units},
-                    expected_fingerprint=formal_baseline,
-                    basis=step1_basis,
+                    formal_baseline,
+                    step1_basis,
                 )
-                clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
             except script_review.Step1WriteConflict as exc:
                 raise TextGenerationError(
                     _quarantine_formal_generation_conflict(

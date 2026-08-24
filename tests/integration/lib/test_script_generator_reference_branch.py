@@ -859,13 +859,15 @@ async def test_step2_violation_quarantines_instead_of_discarding(reference_proje
 
 
 @pytest.mark.asyncio
-async def test_step2_quarantine_transaction_does_not_block_event_loop(reference_project: Path, monkeypatch):
+async def test_cancelled_step2_quarantine_finishes_without_blocking_event_loop(reference_project: Path, monkeypatch):
+    from lib import script_generator as mod
+
     generator = ScriptGenerator(reference_project, generator=_fake_step2_generator(BAD_STEP2_UNIT_TEXT))
     started = threading.Event()
     release = threading.Event()
     caller_thread = threading.get_ident()
     worker_threads: list[int] = []
-    original_quarantine = generator._quarantine_reference_step2
+    original_quarantine = mod.quarantine_and_report
 
     def blocked_quarantine(*args, **kwargs):
         worker_threads.append(threading.get_ident())
@@ -873,16 +875,20 @@ async def test_step2_quarantine_transaction_does_not_block_event_loop(reference_
         assert release.wait(timeout=2)
         return original_quarantine(*args, **kwargs)
 
-    monkeypatch.setattr(generator, "_quarantine_reference_step2", blocked_quarantine)
+    monkeypatch.setattr(mod, "quarantine_and_report", blocked_quarantine)
     generation = asyncio.create_task(generator.generate(episode=1))
     assert await asyncio.to_thread(started.wait, 1)
     ticked = asyncio.Event()
     asyncio.get_running_loop().call_soon(ticked.set)
     await asyncio.wait_for(ticked.wait(), timeout=1)
+    generation.cancel()
+    await asyncio.sleep(0)
+    assert not generation.done()
     release.set()
 
-    with pytest.raises(DraftViolation):
-        await generation
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(generation, timeout=1)
+    assert _step2_quarantine(reference_project).exists()
     assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 
