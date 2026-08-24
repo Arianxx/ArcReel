@@ -1170,7 +1170,7 @@ async def test_split_narration_segments_clears_quarantine_on_regeneration(fake_c
     assert json.loads(_nr_step1_path(fake_ctx).read_text(encoding="utf-8"))["segments"][0]["duration_seconds"] == 4
 
 
-@pytest.mark.parametrize("segment_id", [" ", "items[0]", "E1S1"])
+@pytest.mark.parametrize("segment_id", [" ", "items[0]", "E1S1", "E2S01"])
 async def test_split_narration_segments_rejects_malformed_segment_id(
     fake_ctx: ToolContext, monkeypatch, segment_id: str
 ) -> None:
