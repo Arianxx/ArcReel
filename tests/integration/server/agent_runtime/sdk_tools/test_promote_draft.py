@@ -7,6 +7,7 @@ import copy
 import json
 import threading
 from contextlib import asynccontextmanager
+from typing import Any
 
 import pytest
 
@@ -784,23 +785,25 @@ async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
             release.wait()
 
     holder = asyncio.create_task(asyncio.to_thread(hold_lock))
-    assert await asyncio.to_thread(held.wait, 1)
-    attempted = asyncio.Event()
-    promotion = asyncio.create_task(
-        workflow.promote(
-            1,
-            "reference_step2",
-            draft_revision(draft),
-            before_lock=attempted.set,
-        )
-    )
+    promotion: asyncio.Task[dict[str, Any]] | None = None
     try:
+        assert await asyncio.to_thread(held.wait, 1)
+        attempted = asyncio.Event()
+        promotion = asyncio.create_task(
+            workflow.promote(
+                1,
+                "reference_step2",
+                draft_revision(draft),
+                before_lock=attempted.set,
+            )
+        )
         await asyncio.wait_for(attempted.wait(), 0.3)
         assert not promotion.done()
     finally:
         release.set()
+        assert await asyncio.wait_for(holder, timeout=1) is None
 
-    assert await asyncio.wait_for(holder, timeout=1) is None
+    assert promotion is not None
     out = await asyncio.wait_for(promotion, timeout=1)
     assert out["promoted"] is True
     assert (fake_ctx.project_path / "scripts" / "episode_1.json").exists()

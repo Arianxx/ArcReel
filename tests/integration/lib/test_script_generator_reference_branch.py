@@ -919,24 +919,19 @@ async def test_step2_violation_quarantines_instead_of_discarding(reference_proje
 
 
 @pytest.mark.asyncio
-async def test_cancelled_step2_quarantine_finishes_without_blocking_event_loop(reference_project: Path, monkeypatch):
-    from lib import script_generator as mod
-
+async def test_cancelled_step2_quarantine_finishes_without_blocking_event_loop(reference_project: Path):
     generator = ScriptGenerator(reference_project, generator=_fake_step2_generator(BAD_STEP2_UNIT_TEXT))
     started = threading.Event()
     release = threading.Event()
     caller_thread = threading.get_ident()
     worker_threads: list[int] = []
-    original_quarantine = mod.quarantine_and_report
 
-    def blocked_quarantine(*args, **kwargs):
+    def before_quarantine_commit() -> None:
         worker_threads.append(threading.get_ident())
         started.set()
         assert release.wait(timeout=2)
-        return original_quarantine(*args, **kwargs)
 
-    monkeypatch.setattr(mod, "quarantine_and_report", blocked_quarantine)
-    generation = asyncio.create_task(generator.generate(episode=1))
+    generation = asyncio.create_task(generator.generate(episode=1, before_quarantine_commit=before_quarantine_commit))
     assert await asyncio.to_thread(started.wait, 1)
     ticked = asyncio.Event()
     asyncio.get_running_loop().call_soon(ticked.set)

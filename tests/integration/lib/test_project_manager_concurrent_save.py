@@ -108,39 +108,42 @@ class TestSaveScriptConcurrency:
         def hold_lock() -> None:
             with pm.file_lock(path):
                 held.set()
-                release.wait(timeout=5)
+                release.wait()
 
         holder = threading.Thread(target=hold_lock)
         holder.start()
-        assert await asyncio.to_thread(held.wait, 1)
+        task: asyncio.Task[None] | None = None
+        try:
+            assert await asyncio.to_thread(held.wait, 1)
 
-        attempted = asyncio.Event()
-        entered = asyncio.Event()
-        original_lock = project_manager_module.portalocker.lock
+            attempted = asyncio.Event()
+            entered = asyncio.Event()
+            original_lock = project_manager_module.portalocker.lock
 
-        def tracked_lock(*args, **kwargs) -> None:
-            attempted.set()
-            original_lock(*args, **kwargs)
+            def tracked_lock(*args, **kwargs) -> None:
+                attempted.set()
+                original_lock(*args, **kwargs)
 
-        monkeypatch.setattr(project_manager_module.portalocker, "lock", tracked_lock)
+            monkeypatch.setattr(project_manager_module.portalocker, "lock", tracked_lock)
 
-        async def contend() -> None:
-            async with pm.async_file_lock(path):
-                entered.set()
+            async def contend() -> None:
+                async with pm.async_file_lock(path):
+                    entered.set()
 
-        task = asyncio.create_task(contend())
-        await asyncio.wait_for(attempted.wait(), timeout=1)
-        assert not entered.is_set()
-        release.set()
-        await asyncio.wait_for(task, timeout=1)
-        holder.join(timeout=1)
+            task = asyncio.create_task(contend())
+            await asyncio.wait_for(attempted.wait(), timeout=1)
+            assert not entered.is_set()
+        finally:
+            release.set()
+            if task is not None:
+                await asyncio.wait_for(task, timeout=1)
+            holder.join(timeout=1)
 
     async def test_async_file_lock_times_out_and_can_be_retried(self, tmp_path: Path, monkeypatch) -> None:
         pm = ProjectManager(tmp_path)
         path = tmp_path / "draft.json"
         now = 0.0
         contended = True
-        loop = asyncio.get_running_loop()
         original_lock = project_manager_module.portalocker.lock
 
         def clock() -> float:
@@ -155,16 +158,14 @@ class TestSaveScriptConcurrency:
                 raise project_manager_module.portalocker.AlreadyLocked("busy")
             original_lock(handle, flags)
 
-        monkeypatch.setattr(loop, "time", clock)
-        monkeypatch.setattr(project_manager_module.asyncio, "sleep", advance)
         monkeypatch.setattr(project_manager_module.portalocker, "lock", lock)
 
         with pytest.raises(TimeoutError, match="acquiring lock timed out"):
-            async with pm.async_file_lock(path, timeout=0.05):
+            async with pm.async_file_lock(path, timeout=0.05, clock=clock, sleep=advance):
                 pass
 
         contended = False
-        async with pm.async_file_lock(path, timeout=0.1):
+        async with pm.async_file_lock(path, timeout=0.1, clock=clock, sleep=advance):
             pass
 
     async def test_async_file_lock_propagates_non_contention_errors(self, tmp_path: Path, monkeypatch) -> None:

@@ -188,6 +188,7 @@ class ScriptGenerator:
         generator: Optional["TextGenerator"] = None,
         *,
         config_resolver: ConfigResolver | None = None,
+        before_project_load: Callable[[], None] | None = None,
     ):
         """
         初始化生成器
@@ -205,6 +206,8 @@ class ScriptGenerator:
         self._step1_input_claim: ArtifactInputClaim | None = None
 
         # 加载 project.json
+        if before_project_load is not None:
+            before_project_load()
         self.project_json = self._load_project_json()
         self.content_mode = self.project_json.get("content_mode", "narration")
 
@@ -236,11 +239,18 @@ class ScriptGenerator:
         project_path: str | Path,
         *,
         config_resolver: ConfigResolver | None = None,
+        before_project_load: Callable[[], None] | None = None,
     ) -> "ScriptGenerator":
         """异步工厂方法，自动从 DB 加载供应商配置创建 TextGenerator。"""
         project_name = Path(project_path).name
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name)
-        return cls(project_path, generator, config_resolver=config_resolver)
+        return await asyncio.to_thread(
+            cls,
+            project_path,
+            generator,
+            config_resolver=config_resolver,
+            before_project_load=before_project_load,
+        )
 
     async def generate(
         self,
@@ -248,6 +258,7 @@ class ScriptGenerator:
         output_filename: str | None = None,
         *,
         instructions: str | None = None,
+        before_quarantine_commit: Callable[[], None] | None = None,
     ) -> Path:
         """
         异步生成剧集剧本
@@ -391,6 +402,7 @@ class ScriptGenerator:
             reference_max_refs=self._resolve_max_refs(caps) if step1_units is not None else None,
             reference_unit_durations=reference_unit_durations,
             caps=caps if step1_units is not None else None,
+            before_quarantine_commit=before_quarantine_commit,
         )
 
     async def _generate_drama_step2(
@@ -530,6 +542,7 @@ class ScriptGenerator:
         reference_max_refs: int | None = None,
         reference_unit_durations: dict[str, int] | None = None,
         caps: dict | None = None,
+        before_quarantine_commit: Callable[[], None] | None = None,
     ) -> Path:
         """调用 TextBackend → 解析校验 → 补元数据 → 经写盘统一入口保存（各创作类型共用尾段）。
 
@@ -585,6 +598,7 @@ class ScriptGenerator:
                     exc,
                     base_fingerprint=formal_baseline,
                     expected_draft_revision=step2_draft_baseline,
+                    before_commit=before_quarantine_commit,
                 ) from exc
         else:
             script_data = (
@@ -610,6 +624,7 @@ class ScriptGenerator:
                 exc,
                 base_fingerprint=formal_baseline,
                 expected_draft_revision=step2_draft_baseline,
+                before_commit=before_quarantine_commit,
             ) from exc
 
         # 经写盘统一入口保存：整集生成无「改前」，按严格结构校验（等价原 response_schema 的
@@ -649,6 +664,7 @@ class ScriptGenerator:
                 ),
                 base_fingerprint=formal_baseline,
                 expected_draft_revision=step2_draft_baseline,
+                before_commit=before_quarantine_commit,
             ) from exc
 
         self._quality_probe(script_data, episode)
@@ -1395,6 +1411,7 @@ class ScriptGenerator:
         *,
         base_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
         expected_draft_revision: str | None,
+        before_commit: Callable[[], None] | None = None,
     ) -> DraftViolation:
         """把违约的 step2 产出与报告落待修复草稿，返回携带报告的违约异常（由调用方抛出）。
 
@@ -1412,6 +1429,8 @@ class ScriptGenerator:
                     "reference step2 草稿在模型生成期间已变化；本次生成结果未覆盖并发编辑，请先处置现有草稿",
                     code="draft_revision_conflict",
                 )
+            if before_commit is not None:
+                before_commit()
             report = quarantine_and_report(
                 self.project_path,
                 episode,

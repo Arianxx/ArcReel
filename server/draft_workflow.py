@@ -1005,12 +1005,40 @@ class DraftWorkflow:
             raise ValueError("project has no formal step1 document")
         return path
 
+    def _open_reference_step2(
+        self,
+        episode: int,
+        resolved: str,
+        before_create: Callable[[], None] | None,
+    ) -> None:
+        if before_create is not None:
+            before_create()
+        script = self.ctx.pm.load_script_readonly(
+            self.ctx.project_name,
+            episode_script_filename(episode),
+        )
+        units = script.get("video_units")
+        if not isinstance(units, list) or not units:
+            raise DraftWorkflowError("draft_source_missing", "formal reference step2 has no video_units")
+        write_quarantine(
+            self.ctx.project_path,
+            episode,
+            resolved,
+            content={
+                "title": script.get("title") or f"第{episode}集",
+                "units": [{"text": unit.get("text", "")} for unit in units if isinstance(unit, dict)],
+            },
+            violations=[],
+            meta={"base_fingerprint": script_review.content_fingerprint_of_data(script)},
+        )
+
     async def open(
         self,
         episode: int,
         doc_type: str,
         source: str | None = None,
         *,
+        before_reference_step2_create: Callable[[], None] | None = None,
         before_snapshot: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         resolved = await self._kind(episode, doc_type)
@@ -1022,25 +1050,11 @@ class DraftWorkflow:
                 if existing is not None:
                     return existing
                 if resolved == QUARANTINE_KIND_STEP2:
-                    script = await asyncio.to_thread(
-                        self.ctx.pm.load_script_readonly,
-                        self.ctx.project_name,
-                        episode_script_filename(episode),
-                    )
-                    units = script.get("video_units")
-                    if not isinstance(units, list) or not units:
-                        raise DraftWorkflowError("draft_source_missing", "formal reference step2 has no video_units")
-                    content = {
-                        "title": script.get("title") or f"第{episode}集",
-                        "units": [{"text": unit.get("text", "")} for unit in units if isinstance(unit, dict)],
-                    }
-                    write_quarantine(
-                        self.ctx.project_path,
+                    await run_sync_transaction(
+                        self._open_reference_step2,
                         episode,
                         resolved,
-                        content=content,
-                        violations=[],
-                        meta={"base_fingerprint": script_review.content_fingerprint_of_data(script)},
+                        before_reference_step2_create,
                     )
                 else:
                     await _STEP1_EDIT_OPENERS[resolved](self.ctx, episode, source)
@@ -1176,11 +1190,7 @@ class DraftWorkflow:
                         )
                     generator = await ScriptGenerator.create(
                         self.ctx.project_path,
-                        **(
-                            {"config_resolver": self.ctx.config_resolver}
-                            if self.ctx.config_resolver is not None
-                            else {}
-                        ),
+                        config_resolver=self.ctx.config_resolver,
                     )
                     promote_kwargs = (
                         {"expected_fingerprint": draft.meta["base_fingerprint"]}

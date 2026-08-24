@@ -416,6 +416,7 @@ async def generate_episode_script(
     project_name: str,
     projects: ProjectManager,
     config_resolver: ConfigResolver,
+    before_project_load: Callable[[], None] | None = None,
 ) -> TextGenerationResult:
     episode = request.episode
     instructions = _instructions(request.instructions)
@@ -429,11 +430,20 @@ async def generate_episode_script(
 
     try:
         if request.dry_run:
-            generator = ScriptGenerator(project_path, config_resolver=config_resolver)
+            generator = await asyncio.to_thread(
+                ScriptGenerator,
+                project_path,
+                config_resolver=config_resolver,
+                before_project_load=before_project_load,
+            )
             prompt = await generator.build_prompt(episode, instructions=instructions)
             return TextGenerationResult(f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}")
 
-        generator = await ScriptGenerator.create(project_path, config_resolver=config_resolver)
+        generator = await ScriptGenerator.create(
+            project_path,
+            config_resolver=config_resolver,
+            before_project_load=before_project_load,
+        )
         result_path = await generator.generate(episode=episode, instructions=instructions)
     except FileNotFoundError as exc:
         raise TextGenerationError(f"❌ 文件错误: {exc}") from exc

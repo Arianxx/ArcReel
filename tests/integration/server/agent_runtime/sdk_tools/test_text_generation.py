@@ -11,6 +11,8 @@ import pytest
 
 from lib import script_review
 from lib.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
+from lib.script_generator import ScriptGenerator
+from lib.text_generator import TextGenerator
 from server.agent_runtime.sdk_tools._context import ToolContext
 from server.agent_runtime.sdk_tools.text_generation import (
     _generate_drama_step1_tool as normalize_drama_script_tool,
@@ -20,7 +22,7 @@ from server.agent_runtime.sdk_tools.text_generation import (
     generate_step1_tool,
     get_video_capabilities_tool,
 )
-from server.text_generation import TextGenerationRequest, _parse_normalized_content
+from server.text_generation import TextGenerationRequest, _parse_normalized_content, generate_episode_script
 from tests.integration.server.agent_runtime.sdk_tools.sdk_tools_support import (
     _call,
     _fake_caps_resolver,
@@ -165,6 +167,53 @@ async def test_generate_episode_script_dry_run(fake_ctx: ToolContext, monkeypatc
     out = await _call(tool_obj, {"episode": 1, "dry_run": True})
     assert out.get("is_error") is not True
     assert "fake prompt" in out["content"][0]["text"]
+
+
+async def test_generate_episode_script_dry_run_loads_project_off_event_loop(fake_ctx: ToolContext) -> None:
+    project_path = fake_ctx.project_path
+    (project_path / "project.json").write_text(
+        json.dumps({"content_mode": "ad", "generation_mode": "storyboard", "target_duration": 30}),
+        encoding="utf-8",
+    )
+    resolver = _use_fake_caps(fake_ctx)
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+
+    result = await generate_episode_script(
+        TextGenerationRequest(episode=1, dry_run=True),
+        project_name=fake_ctx.project_name,
+        projects=fake_ctx.pm,
+        config_resolver=resolver,
+        before_project_load=lambda: worker_threads.append(threading.get_ident()),
+    )
+
+    assert "DRY RUN" in result.message
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
+
+
+async def test_script_generator_create_loads_project_off_event_loop(fake_ctx: ToolContext, monkeypatch) -> None:
+    (fake_ctx.project_path / "project.json").write_text(
+        json.dumps({"content_mode": "narration"}),
+        encoding="utf-8",
+    )
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+
+    class _TextBoundary:
+        model = "worker-load"
+
+    async def create_text_generator(_task_type, _project_name=None):
+        return _TextBoundary()
+
+    monkeypatch.setattr(TextGenerator, "create", create_text_generator)
+    generator = await ScriptGenerator.create(
+        fake_ctx.project_path,
+        config_resolver=fake_ctx.config_resolver,
+        before_project_load=lambda: worker_threads.append(threading.get_ident()),
+    )
+
+    assert generator.generator is not None
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 
 async def test_generate_episode_script_missing_step1(fake_ctx: ToolContext) -> None:

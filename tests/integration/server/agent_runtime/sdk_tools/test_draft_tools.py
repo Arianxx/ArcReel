@@ -734,3 +734,35 @@ async def test_open_reference_step2_returns_flat_editable_content(fake_ctx: Tool
     assert draft["revision"].startswith("sha256-v1:")
     envelope = json.loads(quarantine_path(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2).read_text(encoding="utf-8"))
     assert envelope["meta"]["base_fingerprint"] == draft["formal_revision"]
+
+
+async def test_open_reference_step2_creates_draft_off_event_loop(fake_ctx: ToolContext) -> None:
+    _rv_project(fake_ctx)
+    _write_reference_step2(
+        fake_ctx,
+        {
+            "title": "第一集",
+            "content_mode": "narration",
+            "episode": 1,
+            "video_units": [{"unit_id": "E1U01", "text": "@[张三] 起身", "duration_seconds": 4}],
+        },
+    )
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    workflow = DraftWorkflow(
+        DraftContext(
+            project_name=fake_ctx.project_name,
+            projects_root=fake_ctx.projects_root,
+            pm=fake_ctx.pm,
+            config_resolver=fake_ctx.config_resolver,
+        )
+    )
+
+    draft = await workflow.open(
+        1,
+        "reference_step2",
+        before_reference_step2_create=lambda: worker_threads.append(threading.get_ident()),
+    )
+
+    assert draft["content"]["units"] == [{"text": "@[张三] 起身"}]
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
