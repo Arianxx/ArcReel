@@ -189,26 +189,23 @@ def _commit_single_step1(
         clear_quarantine(project_path, episode, kind)
 
 
-def _quarantine_narration_generation(
+def _quarantine_invalid_step1_generation(
     project_path: Path,
     episode: int,
-    step1_path: Path,
+    kind: str,
     content: dict[str, Any],
     violations: list[DraftViolation],
     source: str | None,
+    base_fingerprint: str | None,
 ) -> str:
-    with script_review.formal_step1_lock(project_path, episode, step1_path):
-        return quarantine_and_report(
-            project_path,
-            episode,
-            QUARANTINE_KIND_NARRATION_STEP1,
-            content=content,
-            violations=violations,
-            meta={
-                "source": source or None,
-                "base_fingerprint": script_review.content_fingerprint(step1_path),
-            },
-        )
+    return quarantine_and_report(
+        project_path,
+        episode,
+        kind,
+        content=content,
+        violations=violations,
+        meta={"source": source or None, "base_fingerprint": base_fingerprint},
+    )
 
 
 def _instructions(value: Any) -> str | None:
@@ -1162,18 +1159,16 @@ async def generate_reference_step1(
         if violations:
             async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
                 _assert_draft_revision(draft_path, draft_baseline)
-                with script_review.step1_write_lock(project_path, episode) as step1_path:
-                    report = quarantine_and_report(
-                        project_path,
-                        episode,
-                        QUARANTINE_KIND_STEP1,
-                        content={"units": flat_units},
-                        violations=violations,
-                        meta={
-                            "source": request.source or None,
-                            "base_fingerprint": script_review.content_fingerprint(step1_path),
-                        },
-                    )
+                report = await run_sync_transaction(
+                    _quarantine_invalid_step1_generation,
+                    project_path,
+                    episode,
+                    QUARANTINE_KIND_STEP1,
+                    {"units": flat_units},
+                    violations,
+                    request.source,
+                    formal_baseline,
+                )
             raise TextGenerationError(report)
 
         raw_units = _build_reference_units_from_flat(
@@ -1314,13 +1309,14 @@ async def generate_narration_step1(
             async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
                 _assert_draft_revision(draft_path, draft_baseline)
                 report = await run_sync_transaction(
-                    _quarantine_narration_generation,
+                    _quarantine_invalid_step1_generation,
                     project_path,
                     episode,
-                    step1_path,
+                    QUARANTINE_KIND_NARRATION_STEP1,
                     content,
                     violations,
                     request.source,
+                    formal_baseline,
                 )
             raise TextGenerationError(report)
 

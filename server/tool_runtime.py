@@ -772,20 +772,24 @@ async def create_project(
         value = request.value
         name = services.projects.normalize_project_name(value.name)
         services.projects.create_project(name, content_mode=value.content_mode)
-        project = services.projects.create_project_metadata(
-            name,
-            value.title,
-            content_mode=value.content_mode,
-            aspect_ratio=value.aspect_ratio,
-            default_duration=value.default_duration,
-            extras={
-                "generation_mode": value.generation_mode,
-                "grid_storyboard": value.grid_storyboard,
-            },
-            target_duration=value.target_duration,
-            brief=value.brief,
-            source_kind=value.source_kind,
-        )
+        try:
+            project = services.projects.create_project_metadata(
+                name,
+                value.title,
+                content_mode=value.content_mode,
+                aspect_ratio=value.aspect_ratio,
+                default_duration=value.default_duration,
+                extras={
+                    "generation_mode": value.generation_mode,
+                    "grid_storyboard": value.grid_storyboard,
+                },
+                target_duration=value.target_duration,
+                brief=value.brief,
+                source_kind=value.source_kind,
+            )
+        except Exception:
+            services.projects.delete_project_directory(name)
+            raise
         return {"name": name, "project": project}
 
     try:

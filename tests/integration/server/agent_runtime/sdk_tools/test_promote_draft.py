@@ -36,7 +36,7 @@ from server.agent_runtime.sdk_tools.text_generation import (
     promote_draft_tool,
 )
 from server.draft_workflow import DraftContext, DraftWorkflow
-from server.text_generation import TextGenerationRequest, generate_reference_step1
+from server.text_generation import TextGenerationError, TextGenerationRequest, generate_reference_step1
 from tests.integration.server.agent_runtime.sdk_tools.sdk_tools_support import (
     _RV_NOVEL,
     _call,
@@ -258,6 +258,8 @@ async def test_promote_conflicts_when_official_changed_after_open(fake_ctx: Tool
     out = await _promote(fake_ctx)
 
     assert out.get("is_error") is True
+    assert "并发冲突" in out["content"][0]["text"]
+    assert "base_revision" in out["content"][0]["text"]
     report = out["content"][0]["text"]
     assert "并发冲突" in report
     assert "accept_formal_revision" in report
@@ -358,8 +360,50 @@ async def test_split_violation_quarantine_records_base_fingerprint(fake_ctx: Too
     out = await _promote(fake_ctx)
 
     assert out.get("is_error") is True
-    assert "并发冲突" in out["content"][0]["text"]
-    assert "base_revision" in out["content"][0]["text"]
+
+
+async def test_split_violation_keeps_pre_generation_formal_baseline(fake_ctx: ToolContext, monkeypatch) -> None:
+    from server import text_generation as mod
+
+    _rv_source(fake_ctx)
+    _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
+    expected = script_review.content_fingerprint(_rv_step1_path(fake_ctx))
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _Generator:
+        async def generate(self, _request, project_name=None):
+            started.set()
+            await release.wait()
+
+            class _Result:
+                text = json.dumps({"units": [_rv_unit("@[不存在的人] 出场")]}, ensure_ascii=False)
+
+            return _Result()
+
+    async def fake_create(_task_type, project_name=None):
+        return _Generator()
+
+    resolver = _use_fake_caps(fake_ctx)
+    monkeypatch.setattr(mod.TextGenerator, "create", fake_create)
+    generation = asyncio.create_task(
+        generate_reference_step1(
+            TextGenerationRequest(episode=1),
+            project_name=fake_ctx.project_name,
+            projects=fake_ctx.pm,
+            config_resolver=resolver,
+        )
+    )
+    await started.wait()
+    _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 在 @[村口] 等候")])
+    release.set()
+
+    with pytest.raises(TextGenerationError):
+        await generation
+
+    current = script_review.content_fingerprint(_rv_step1_path(fake_ctx))
+    assert current != expected
+    assert _read_rv_quarantine(fake_ctx)["meta"]["base_fingerprint"] == expected
 
 
 @pytest.mark.parametrize(

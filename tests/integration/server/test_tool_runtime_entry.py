@@ -95,6 +95,33 @@ async def test_entry_handlers_create_list_and_upload_a_readable_source(tmp_path:
     assert source_text.value.text == "第一章\n你好"
 
 
+async def test_create_project_rolls_back_when_metadata_initialization_fails(tmp_path: Path) -> None:
+    class FailingMetadataProjectManager(ProjectManager):
+        def create_project_metadata(self, *_args, **_kwargs):
+            raise OSError("disk full")
+
+    projects_root = tmp_path / "projects"
+    services = Services(
+        projects=FailingMetadataProjectManager(projects_root),
+        workflow_planner=_Unused(),  # type: ignore[arg-type]
+        capabilities=_Unused(),  # type: ignore[arg-type]
+    )
+    request = ToolRequest(
+        CreateProjectToolRequest(
+            name="demo",
+            title="Demo",
+            content_mode="narration",
+            generation_mode="storyboard",
+        )
+    )
+
+    failed = await create_project(request, CallerContext(user_id="test", source="mcp"), services)
+
+    assert failed.problem is not None and failed.problem.code == "internal_error"
+    assert not (projects_root / "demo").exists()
+    ProjectManager(projects_root).create_project("demo")
+
+
 async def test_list_projects_uses_readonly_loader(tmp_path: Path, monkeypatch) -> None:
     services = _services(tmp_path)
     services.projects.create_project("demo")
