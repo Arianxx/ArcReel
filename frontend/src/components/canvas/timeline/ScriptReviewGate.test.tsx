@@ -158,6 +158,7 @@ describe("ScriptReviewGate", () => {
     fireEvent.click(screen.getByText("让 Agent 修复"));
     const input = useAssistantStore.getState().input;
     expect(input).toContain("1 处违约待修复");
+    expect(input).toContain("doc_type=narration_step1");
     expect(input).toContain("1. segment E1S01 的时长 5 不在模型档位 [4, 6, 8] 内");
     expect(useAppStore.getState().assistantPanelOpen).toBe(true);
   });
@@ -177,6 +178,7 @@ describe("ScriptReviewGate", () => {
     fireEvent.click(screen.getByText("让 Agent 修复"));
     const input = useAssistantStore.getState().input;
     expect(input).toContain("promote_draft");
+    expect(input).toContain("doc_type=drama_step1");
     expect(input).not.toContain("违约待修复");
   });
 

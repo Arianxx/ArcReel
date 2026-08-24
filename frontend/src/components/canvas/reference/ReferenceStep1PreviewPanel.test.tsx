@@ -190,6 +190,7 @@ describe("ReferenceStep1PreviewPanel", () => {
 
     const input = useAssistantStore.getState().input;
     expect(input).toContain("第 1 集");
+    expect(input).toContain("doc_type=reference_step1");
     expect(input).toContain("1. unit E1U01 使用了全角花括号");
     expect(input).toContain("2. unit E1U01 的台词念不完");
     expect(useAppStore.getState().assistantPanelOpen).toBe(true);

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 
@@ -14,6 +15,7 @@ from lib.draft_quarantine import (
     quarantine_path,
     write_quarantine,
 )
+from lib.project_manager import ProjectManager
 from lib.reference_video.draft_validation import DraftViolation
 from server.agent_runtime.sdk_tools._context import ToolContext
 from server.agent_runtime.sdk_tools.text_generation import (
@@ -696,6 +698,43 @@ async def test_normalize_drama_script_clears_quarantine_on_regeneration(fake_ctx
     assert not _drama_quarantine_path(fake_ctx).exists()
     saved = json.loads(_drama_step1_path(fake_ctx).read_text(encoding="utf-8"))
     assert saved["scenes"][0]["scene_description"] == "重新规范化后的描述。"
+
+
+async def test_normalize_drama_script_serializes_commit_with_draft_edits(fake_ctx: ToolContext, monkeypatch) -> None:
+    """重生成的正式文件提交与草稿 patch/promote 共用草稿锁，避免交叉覆盖。"""
+    from server import text_generation as mod
+
+    _drama_project(fake_ctx)
+    _write_drama_step1(fake_ctx, [_drama_scene()])
+    await _open_drama_for_edit(fake_ctx, source="source/episode_1.txt")
+
+    regenerated = {"title": "第一集", "scenes": [_drama_scene(scene_description="重新规范化后的描述。")]}
+
+    class _Generator:
+        async def generate(self, _request, project_name=None):
+            class _R:
+                text = json.dumps(regenerated, ensure_ascii=False)
+
+            return _R()
+
+    async def fake_create(_task_type, project_name=None):
+        return _Generator()
+
+    def regenerate() -> dict:
+        return asyncio.run(
+            _call(normalize_drama_script_tool(fake_ctx), {"episode": 1, "source": "source/episode_1.txt"})
+        )
+
+    _use_fake_caps(fake_ctx)
+    monkeypatch.setattr(mod.TextGenerator, "create", fake_create)
+    pm = ProjectManager(str(fake_ctx.project_path.parent))
+    with pm.file_lock(_drama_quarantine_path(fake_ctx)):
+        task = asyncio.create_task(asyncio.to_thread(regenerate))
+        await asyncio.sleep(0.1)
+        assert not task.done(), "generation commit must wait for the draft lock"
+
+    out = await task
+    assert out.get("is_error") is not True, out
 
 
 # ---------------------------------------------------------------------------

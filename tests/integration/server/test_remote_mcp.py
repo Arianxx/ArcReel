@@ -345,7 +345,18 @@ async def test_remote_mcp_draft_supports_multiple_patches_and_discard(remote_ser
     assert promoted.structuredContent["draft"]["promoted"] is True
 
 
-async def test_remote_mcp_text_generation_and_script_patch_return_structured_content(remote_server) -> None:
+async def test_remote_mcp_text_generation_and_script_patch_return_structured_content(
+    remote_server, remote_projects: ProjectManager
+) -> None:
+    remote_projects.create_project("ad-demo", content_mode="ad")
+    remote_projects.create_project_metadata(
+        "ad-demo",
+        "Ad Demo",
+        "",
+        "ad",
+        target_duration=30,
+        brief="展示产品卖点",
+    )
     app = _mounted(remote_server)
     async with remote_server.session_manager.run():
         async with httpx.AsyncClient(
@@ -368,7 +379,7 @@ async def test_remote_mcp_text_generation_and_script_patch_return_structured_con
                     )
                     confirmed = await session.call_tool("confirm_script_review", {"project": "demo", "episode": 1})
                     script = await session.call_tool(
-                        "generate_episode_script", {"project": "demo", "episode": 1, "dry_run": True}
+                        "generate_episode_script", {"project": "ad-demo", "episode": 1, "dry_run": True}
                     )
                     patched = await session.call_tool(
                         "patch_episode_script",
@@ -384,8 +395,8 @@ async def test_remote_mcp_text_generation_and_script_patch_return_structured_con
     assert step1.structuredContent["text_generation"]["message"]
     assert not confirmed.isError
     assert confirmed.structuredContent["text_generation"]["message"]
-    assert script.isError
-    assert script.structuredContent["problem"]["code"] == "internal_error"
+    assert not script.isError
+    assert "DRY RUN" in script.structuredContent["text_generation"]["message"]
     assert not patched.isError
     assert patched.structuredContent["script_patch"]["problems"][0]["code"] == "revision_conflict"
 

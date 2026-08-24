@@ -466,9 +466,11 @@ async def generate_drama_step1(
                 scene["needs_replan"] = True
 
         step1_path = episode_drafts_dir(project_path, episode) / STEP1_FILENAMES["drama"]
-        with script_review.formal_step1_lock(project_path, episode, step1_path):
-            script_review.write_formal_step1_locked(project_path, episode, step1_path, content, basis=step1_basis)
-            clear_quarantine(project_path, episode, QUARANTINE_KIND_DRAMA_STEP1)
+        draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_DRAMA_STEP1)
+        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            with script_review.formal_step1_lock(project_path, episode, step1_path):
+                script_review.write_formal_step1_locked(project_path, episode, step1_path, content, basis=step1_basis)
+                clear_quarantine(project_path, episode, QUARANTINE_KIND_DRAMA_STEP1)
 
         return TextGenerationResult(
             f"✅ 规范化剧本（结构化内容）已保存: {step1_path}\n📊 生成统计: {len(raw_scenes)} 个分镜"
@@ -992,18 +994,20 @@ async def generate_reference_step1(
             source_language=project.get("source_language"),
         )
         if violations:
-            with script_review.step1_write_lock(project_path, episode) as step1_path:
-                report = quarantine_and_report(
-                    project_path,
-                    episode,
-                    QUARANTINE_KIND_STEP1,
-                    content={"units": flat_units},
-                    violations=violations,
-                    meta={
-                        "source": request.source or None,
-                        "base_fingerprint": script_review.content_fingerprint(step1_path),
-                    },
-                )
+            draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_STEP1)
+            with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+                with script_review.step1_write_lock(project_path, episode) as step1_path:
+                    report = quarantine_and_report(
+                        project_path,
+                        episode,
+                        QUARANTINE_KIND_STEP1,
+                        content={"units": flat_units},
+                        violations=violations,
+                        meta={
+                            "source": request.source or None,
+                            "base_fingerprint": script_review.content_fingerprint(step1_path),
+                        },
+                    )
             raise TextGenerationError(report)
 
         raw_units = _build_reference_units_from_flat(
@@ -1012,9 +1016,11 @@ async def generate_reference_step1(
             episode=episode,
             max_refs=split_caps.max_refs,
         )
-        with script_review.step1_write_lock(project_path, episode) as step1_path:
-            script_review.write_step1_locked(project_path, episode, {"units": raw_units}, basis=step1_basis)
-            clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
+        draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_STEP1)
+        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            with script_review.step1_write_lock(project_path, episode) as step1_path:
+                script_review.write_step1_locked(project_path, episode, {"units": raw_units}, basis=step1_basis)
+                clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
         warning_lines = _reference_voice_warning_lines(
             [flat_unit["text"] for flat_unit in flat_units],
             project,
@@ -1107,29 +1113,33 @@ async def generate_narration_step1(
         )
         step1_path = _narration_step1_path(project_path, episode)
         if violations:
-            with script_review.formal_step1_lock(project_path, episode, step1_path):
-                report = quarantine_and_report(
-                    project_path,
-                    episode,
-                    QUARANTINE_KIND_NARRATION_STEP1,
-                    content=content,
-                    violations=violations,
-                    meta={
-                        "source": request.source or None,
-                        "base_fingerprint": script_review.content_fingerprint(step1_path),
-                    },
-                )
+            draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
+            with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+                with script_review.formal_step1_lock(project_path, episode, step1_path):
+                    report = quarantine_and_report(
+                        project_path,
+                        episode,
+                        QUARANTINE_KIND_NARRATION_STEP1,
+                        content=content,
+                        violations=violations,
+                        meta={
+                            "source": request.source or None,
+                            "base_fingerprint": script_review.content_fingerprint(step1_path),
+                        },
+                    )
             raise TextGenerationError(report)
 
-        with script_review.formal_step1_lock(project_path, episode, step1_path):
-            script_review.write_formal_step1_locked(
-                project_path,
-                episode,
-                step1_path,
-                content,
-                basis=step1_basis,
-            )
-            clear_quarantine(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
+        draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
+        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            with script_review.formal_step1_lock(project_path, episode, step1_path):
+                script_review.write_formal_step1_locked(
+                    project_path,
+                    episode,
+                    step1_path,
+                    content,
+                    basis=step1_basis,
+                )
+                clear_quarantine(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
 
         total_chars = sum(len(str(segment.get("novel_text") or "")) for segment in raw_segments)
         total_seconds = sum(int(segment.get("duration_seconds") or 0) for segment in raw_segments)
