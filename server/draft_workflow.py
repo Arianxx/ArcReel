@@ -985,6 +985,17 @@ class DraftWorkflow:
         detail = f"episode {episode} has no {doc_type_for_kind(kind)} draft"
         raise DraftWorkflowError("draft_not_found", detail)
 
+    def _draft_snapshot(
+        self,
+        episode: int,
+        kind: str,
+        before_snapshot: Callable[[], None] | None = None,
+    ) -> tuple[QuarantinedDraft | None, str | None]:
+        if before_snapshot is not None:
+            before_snapshot()
+        draft = read_quarantine(self.ctx.project_path, episode, kind)
+        return draft, draft_revision(draft) if draft is not None else None
+
     def _formal_path(self, episode: int, kind: str) -> Path:
         if kind == QUARANTINE_KIND_STEP2:
             return self.ctx.project_path / "scripts" / episode_script_filename(episode)
@@ -1129,15 +1140,21 @@ class DraftWorkflow:
         base_revision: str,
         *,
         before_commit: Callable[[], None] | None = None,
+        before_snapshot: Callable[[], None] | None = None,
+        before_step2_step1_lock: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         resolved = await self._kind(episode, doc_type)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
         result_path: Path | None = None
         async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
-            draft = read_quarantine(self.ctx.project_path, episode, resolved)
+            draft, actual_revision = await asyncio.to_thread(
+                self._draft_snapshot,
+                episode,
+                resolved,
+                before_snapshot,
+            )
             if draft is None:
-                return self._read(episode, resolved)
-            actual_revision = draft_revision(draft)
+                return await asyncio.to_thread(self._read, episode, resolved)
             if base_revision != actual_revision:
                 raise DraftWorkflowError(
                     "revision_conflict",
@@ -1170,6 +1187,7 @@ class DraftWorkflow:
                     result_path = await generator.promote_reference_step2_draft(
                         episode,
                         _step2_lock_held=True,
+                        before_step1_lock=before_step2_step1_lock,
                         **promote_kwargs,
                     )
             except DraftWorkflowError:
@@ -1192,13 +1210,24 @@ class DraftWorkflow:
             value["path"] = str(result_path)
         return value
 
-    async def discard(self, episode: int, doc_type: str, base_revision: str) -> dict[str, Any]:
+    async def discard(
+        self,
+        episode: int,
+        doc_type: str,
+        base_revision: str,
+        *,
+        before_snapshot: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
         resolved = await self._kind(episode, doc_type, allow_stale_discard=True)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
         async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
-            draft = read_quarantine(self.ctx.project_path, episode, resolved)
+            draft, actual_revision = await asyncio.to_thread(
+                self._draft_snapshot,
+                episode,
+                resolved,
+                before_snapshot,
+            )
             if draft is not None:
-                actual_revision = draft_revision(draft)
                 if base_revision != actual_revision:
                     raise DraftWorkflowError(
                         "revision_conflict",

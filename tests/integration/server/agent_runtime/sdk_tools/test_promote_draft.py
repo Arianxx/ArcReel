@@ -6,7 +6,7 @@ import asyncio
 import copy
 import json
 import threading
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -580,58 +580,85 @@ async def test_writing_reference_step1_clears_stale_step2_quarantine(fake_ctx: T
 async def test_reference_step1_generation_and_step2_promotion_complete_without_lock_inversion(
     fake_ctx: ToolContext, monkeypatch
 ) -> None:
-    from server import draft_workflow as mod
+    from lib.text_generator import TextGenerator
 
     _rv_source(fake_ctx)
-    _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
-    step2_path = quarantine_path(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2)
+    split = await _run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[张三] 起身")])
+    assert split.get("is_error") is not True, split
+    project = fake_ctx.pm.project_payload  # pyright: ignore[reportAttributeAccessIssue]
+    project["episodes"][0]["step1_review"] = {
+        "fingerprint": script_review.content_fingerprint(_rv_step1_path(fake_ctx)),
+        "confirmed_at": "2026-08-24T00:00:00Z",
+    }
+    (fake_ctx.project_path / "project.json").write_text(
+        json.dumps(project, ensure_ascii=False),
+        encoding="utf-8",
+    )
     write_quarantine(
         fake_ctx.project_path,
         1,
         QUARANTINE_KIND_STEP2,
-        content={"title": "第1集", "units": [{"text": "@[张三] 起身"}]},
+        content={"title": "第1集", "units": [{"text": "镜头1：中景，平视。@[张三] 起身。"}]},
         violations=[],
     )
-    promotion_holds_step2 = asyncio.Event()
-    allow_promotion_formal_read = asyncio.Event()
+    draft = read_quarantine(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2)
+    assert draft is not None
+    resolver = _use_fake_caps(fake_ctx)
+    workflow = DraftWorkflow(
+        DraftContext(
+            project_name=fake_ctx.project_name,
+            projects_root=fake_ctx.projects_root,
+            pm=fake_ctx.pm,
+            config_resolver=fake_ctx.config_resolver,
+        )
+    )
+    promotion_holds_step2 = threading.Event()
+    allow_promotion_step1_lock = threading.Event()
 
-    class _FakeGenerator:
-        @classmethod
-        async def create(cls, project_path, **_kwargs):
-            obj = cls()
-            obj.project_path = project_path
-            return obj
+    class _TextBoundary:
+        model = "lock-order"
 
-        async def promote_reference_step2_draft(self, episode: int, **_kwargs):
-            promotion_holds_step2.set()
-            await allow_promotion_formal_read.wait()
-            with script_review.step1_write_lock(self.project_path, episode):
-                pass
-            return self.project_path / "scripts" / f"episode_{episode}.json"
+    async def create_text_generator(_task_type, _project_name=None):
+        return _TextBoundary()
 
-    monkeypatch.setattr(mod, "ScriptGenerator", _FakeGenerator)
-    monkeypatch.setattr(mod.script_review, "gate_blocks_step2", lambda *_args: False)
+    monkeypatch.setattr(TextGenerator, "create", create_text_generator)
     generation_attempted_step2 = threading.Event()
-    original_file_lock = ProjectManager.file_lock
 
-    @contextmanager
-    def observed_file_lock(self, path):
-        if path == step2_path:
-            generation_attempted_step2.set()
-        with original_file_lock(self, path):
-            yield
+    def pause_before_step1_lock() -> None:
+        promotion_holds_step2.set()
+        allow_promotion_step1_lock.wait()
 
-    monkeypatch.setattr(ProjectManager, "file_lock", observed_file_lock)
-    promotion = asyncio.create_task(_promote(fake_ctx))
-    await asyncio.wait_for(promotion_holds_step2.wait(), timeout=1)
-    generation = asyncio.create_task(_run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[张三] 起身")]))
-    assert await asyncio.to_thread(generation_attempted_step2.wait, 1)
-    allow_promotion_formal_read.set()
+    promotion = asyncio.create_task(
+        workflow.promote(
+            1,
+            "reference_step2",
+            draft_revision(draft),
+            before_step2_step1_lock=pause_before_step1_lock,
+        )
+    )
+    tasks: list[asyncio.Task] = [promotion]
+    try:
+        assert await asyncio.to_thread(promotion_holds_step2.wait, 1)
+        monkeypatch.setattr(TextGenerator, "create", _rv_generator_returning([_rv_unit("@[张三] 起身")]))
+        generation = asyncio.create_task(
+            generate_reference_step1(
+                TextGenerationRequest(episode=1),
+                project_name=fake_ctx.project_name,
+                projects=fake_ctx.pm,
+                config_resolver=resolver,
+                before_commit=generation_attempted_step2.set,
+            )
+        )
+        tasks.append(generation)
+        assert await asyncio.to_thread(generation_attempted_step2.wait, 1)
+    finally:
+        allow_promotion_step1_lock.set()
+        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=2)
 
-    promoted, generated = await asyncio.wait_for(asyncio.gather(promotion, generation), timeout=2)
+    promoted, generated = results
 
-    assert promoted.get("is_error") is not True, promoted
-    assert generated.get("is_error") is not True, generated
+    assert promoted["promoted"] is True
+    assert generated.message.startswith("✅")
 
 
 async def test_promote_reference_step1_preserves_step2_draft_when_content_unchanged(fake_ctx: ToolContext) -> None:
@@ -721,7 +748,7 @@ async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
     def hold_lock() -> None:
         with pm.file_lock(path):
             held.set()
-            release.wait(2)
+            release.wait()
 
     holder = asyncio.create_task(asyncio.to_thread(hold_lock))
     assert await asyncio.to_thread(held.wait, 1)
@@ -754,7 +781,7 @@ async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
     finally:
         release.set()
 
-    assert await holder is None
+    assert await asyncio.wait_for(holder, timeout=1) is None
     out = await asyncio.wait_for(promotion, timeout=1)
     assert out.get("is_error") is not True, out
 

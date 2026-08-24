@@ -10,6 +10,7 @@ import json
 import logging
 import re
 from collections import Counter
+from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1425,6 +1426,7 @@ class ScriptGenerator:
         *,
         expected_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
         _step2_lock_held: bool = False,
+        before_step1_lock: Callable[[], None] | None = None,
     ) -> Path:
         draft_path = quarantine_path(self.project_path, episode, QUARANTINE_KIND_STEP2)
         pm = ProjectManager(str(self.project_path.parent))
@@ -1435,6 +1437,7 @@ class ScriptGenerator:
                 caps,
                 output_filename,
                 expected_fingerprint=expected_fingerprint,
+                before_step1_lock=before_step1_lock,
             )
 
     def _promote_reference_step2_draft_locked_sync(
@@ -1444,6 +1447,7 @@ class ScriptGenerator:
         output_filename: str | None = None,
         *,
         expected_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
+        before_step1_lock: Callable[[], None] | None = None,
     ) -> Path:
         draft = read_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)
         if draft is None:
@@ -1452,6 +1456,8 @@ class ScriptGenerator:
                 f"（{quarantine_path(self.project_path, episode, QUARANTINE_KIND_STEP2)} 缺失或内容不是合法信封）"
             )
 
+        if before_step1_lock is not None:
+            before_step1_lock()
         step1_units = self._load_reference_step1(
             episode,
             self._resolve_raw_supported_durations(caps),
@@ -1535,6 +1541,7 @@ class ScriptGenerator:
         *,
         expected_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
         _step2_lock_held: bool = False,
+        before_step1_lock: Callable[[], None] | None = None,
     ) -> Path:
         """按产出时那套校验器全量重判 step2 待修复草稿，通过则晋升为正式剧本并清除草稿。
 
@@ -1553,6 +1560,7 @@ class ScriptGenerator:
             output_filename,
             expected_fingerprint=expected_fingerprint,
             _step2_lock_held=_step2_lock_held,
+            before_step1_lock=before_step1_lock,
         )
 
     def _parse_response(self, response_text: str, episode: int) -> dict:

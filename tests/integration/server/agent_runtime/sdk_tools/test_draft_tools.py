@@ -20,7 +20,7 @@ from lib.draft_quarantine import (
 )
 from server.agent_runtime.sdk_tools._context import ToolContext
 from server.agent_runtime.sdk_tools.text_generation import discard_draft_tool, open_draft_tool, patch_draft_tool
-from server.draft_workflow import DraftContext, DraftWorkflow
+from server.draft_workflow import DraftContext, DraftWorkflow, DraftWorkflowError
 from tests.integration.server.agent_runtime.sdk_tools.sdk_tools_support import (
     _RV_NOVEL,
     _call,
@@ -166,6 +166,33 @@ async def test_open_and_patch_build_response_snapshot_off_event_loop(fake_ctx: T
     )
 
     assert patched["revision"] == opened["revision"]
+    assert len(worker_threads) == 2
+    assert all(thread != caller_thread for thread in worker_threads)
+
+
+async def test_promote_and_discard_build_revision_snapshot_off_event_loop(fake_ctx: ToolContext) -> None:
+    _rv_source(fake_ctx)
+    _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
+    await _open_for_edit(fake_ctx, source="source/episode_1.txt")
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    workflow = DraftWorkflow(
+        DraftContext(
+            project_name=fake_ctx.project_name,
+            projects_root=fake_ctx.projects_root,
+            pm=fake_ctx.pm,
+            config_resolver=fake_ctx.config_resolver,
+        )
+    )
+
+    def observe() -> None:
+        worker_threads.append(threading.get_ident())
+
+    with pytest.raises(DraftWorkflowError, match="draft revision changed"):
+        await workflow.promote(1, "reference_step1", "stale", before_snapshot=observe)
+    with pytest.raises(DraftWorkflowError, match="draft revision changed"):
+        await workflow.discard(1, "reference_step1", "stale", before_snapshot=observe)
+
     assert len(worker_threads) == 2
     assert all(thread != caller_thread for thread in worker_threads)
 
