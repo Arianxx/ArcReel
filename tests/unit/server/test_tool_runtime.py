@@ -187,7 +187,7 @@ async def test_sync_transaction_finishes_worker_before_propagating_cancellation(
     release.set()
 
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=1)
     assert finished.is_set()
 
 
@@ -259,12 +259,18 @@ async def test_content_readers_return_body_and_revision_from_the_same_snapshot(t
     caller = CallerContext(user_id="u1", source="mcp")
     caller_thread = threading.get_ident()
     reader_threads: list[int] = []
+    original_load_project_readonly = projects.load_project_readonly
     original_load_script_readonly = projects.load_script_readonly
+
+    def tracked_load_project_readonly(project_name: str) -> dict:
+        reader_threads.append(threading.get_ident())
+        return original_load_project_readonly(project_name)
 
     def tracked_load_script_readonly(project_name: str, filename: str) -> dict:
         reader_threads.append(threading.get_ident())
         return original_load_script_readonly(project_name, filename)
 
+    monkeypatch.setattr(projects, "load_project_readonly", tracked_load_project_readonly)
     monkeypatch.setattr(projects, "load_script_readonly", tracked_load_script_readonly)
 
     project = await get_project_content(ToolRequest(None), scope, caller, services)
@@ -278,7 +284,7 @@ async def test_content_readers_return_body_and_revision_from_the_same_snapshot(t
     assert script.value is not None
     assert script.value.script["title"] == "第一集"
     assert script.value.revision.startswith("sha256-v1:")
-    assert reader_threads
+    assert len(reader_threads) == 2
     assert all(thread != caller_thread for thread in reader_threads)
 
 

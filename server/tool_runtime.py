@@ -492,6 +492,11 @@ def _file_problem(name: str, exc: BaseException) -> ToolProblem:
     return ToolProblem("internal_error", f"{name} 失败: {exc}")
 
 
+def _get_project_content_sync(project_name: str, projects: ProjectManager) -> ProjectContent:
+    project = projects.load_project_readonly(project_name)
+    return ProjectContent(revision=prefixed_canonical_json_digest(project), project=project)
+
+
 async def get_project_content(
     _request: ToolRequest[None],
     scope: ProjectScope,
@@ -499,12 +504,12 @@ async def get_project_content(
     services: Services,
 ) -> ToolOutcome[ProjectContent]:
     try:
-        project = services.projects.load_project_readonly(scope.project_name)
+        content = await asyncio.to_thread(_get_project_content_sync, scope.project_name, services.projects)
     except FileNotFoundError as exc:
         return ToolOutcome(problem=ToolProblem("project_not_found", f"项目未找到或缺 project.json: {exc}"))
     except Exception as exc:  # noqa: BLE001
         return ToolOutcome(problem=ToolProblem("internal_error", f"get_project_content 失败: {exc}"))
-    return ToolOutcome(value=ProjectContent(revision=prefixed_canonical_json_digest(project), project=project))
+    return ToolOutcome(value=content)
 
 
 async def get_episode_script(

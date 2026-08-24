@@ -1,6 +1,8 @@
 """ScriptGenerator reference_video 分支测试。"""
 
+import asyncio
 import json as _json
+import threading
 from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
@@ -854,6 +856,34 @@ async def test_step2_violation_quarantines_instead_of_discarding(reference_proje
     assert [v["code"] for v in envelope["violations"]] == ["unregistered_asset"]
     # 草稿装的是扁平草稿结构（Agent 要改的是其中的正文 / 原文锚 / 时长）
     assert envelope["content"]["units"][0]["text"] == BAD_STEP2_UNIT_TEXT
+
+
+@pytest.mark.asyncio
+async def test_step2_quarantine_transaction_does_not_block_event_loop(reference_project: Path, monkeypatch):
+    generator = ScriptGenerator(reference_project, generator=_fake_step2_generator(BAD_STEP2_UNIT_TEXT))
+    started = threading.Event()
+    release = threading.Event()
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    original_quarantine = generator._quarantine_reference_step2
+
+    def blocked_quarantine(*args, **kwargs):
+        worker_threads.append(threading.get_ident())
+        started.set()
+        assert release.wait(timeout=2)
+        return original_quarantine(*args, **kwargs)
+
+    monkeypatch.setattr(generator, "_quarantine_reference_step2", blocked_quarantine)
+    generation = asyncio.create_task(generator.generate(episode=1))
+    assert await asyncio.to_thread(started.wait, 1)
+    ticked = asyncio.Event()
+    asyncio.get_running_loop().call_soon(ticked.set)
+    await asyncio.wait_for(ticked.wait(), timeout=1)
+    release.set()
+
+    with pytest.raises(DraftViolation):
+        await generation
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 
 @pytest.mark.asyncio

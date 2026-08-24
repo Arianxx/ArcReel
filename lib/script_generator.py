@@ -562,7 +562,7 @@ class ScriptGenerator:
                     reference_step1, response_text, episode, max_refs=reference_max_refs
                 )
             except DraftViolation as exc:
-                raise self._quarantine_reference_step2(episode, response_text, exc) from exc
+                raise await asyncio.to_thread(self._quarantine_reference_step2, episode, response_text, exc) from exc
         else:
             script_data = (
                 self._parse_ad_reference_response(response_text, episode)
@@ -580,7 +580,7 @@ class ScriptGenerator:
         except DraftViolation as exc:
             if reference_step1 is None:
                 raise
-            raise self._quarantine_reference_step2(episode, response_text, exc) from exc
+            raise await asyncio.to_thread(self._quarantine_reference_step2, episode, response_text, exc) from exc
 
         # 经写盘统一入口保存：整集生成无「改前」，按严格结构校验（等价原 response_schema 的
         # Pydantic 校验），并继承 metadata 重算、加锁、filename↔episode 一致性与 project.json
@@ -598,7 +598,8 @@ class ScriptGenerator:
         except ScriptWriteConflict as exc:
             if reference_step1 is None:
                 raise
-            raise self._quarantine_reference_step2(
+            raise await asyncio.to_thread(
+                self._quarantine_reference_step2,
                 episode,
                 response_text,
                 DraftViolation(
