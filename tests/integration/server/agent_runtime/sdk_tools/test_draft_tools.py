@@ -12,6 +12,8 @@ from lib.draft_quarantine import (
     QUARANTINE_KIND_DRAMA_STEP1,
     QUARANTINE_KIND_NARRATION_STEP1,
     QUARANTINE_KIND_STEP1,
+    QUARANTINE_KIND_STEP2,
+    quarantine_path,
     write_quarantine,
 )
 from server.agent_runtime.sdk_tools._context import ToolContext
@@ -561,3 +563,5 @@ async def test_open_reference_step2_returns_flat_editable_content(fake_ctx: Tool
     draft = _draft_result(out)
     assert draft["content"] == {"title": "第一集", "units": [{"text": "@[张三] 起身"}]}
     assert draft["revision"].startswith("sha256-v1:")
+    envelope = json.loads(quarantine_path(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2).read_text(encoding="utf-8"))
+    assert envelope["meta"]["base_fingerprint"] == draft["formal_revision"]

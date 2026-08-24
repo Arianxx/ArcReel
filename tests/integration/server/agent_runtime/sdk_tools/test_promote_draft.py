@@ -443,7 +443,9 @@ async def test_promote_draft_step2_uses_async_factory(fake_ctx: ToolContext, mon
         QUARANTINE_KIND_STEP2,
         content={"title": "第1集", "units": [{"text": "@[张三] 起身"}]},
         violations=[],
+        meta={"base_fingerprint": "formal-baseline"},
     )
+    seen: dict[str, object] = {}
 
     class _FakeGenerator:
         def __init__(self, _path) -> None:
@@ -455,13 +457,15 @@ async def test_promote_draft_step2_uses_async_factory(fake_ctx: ToolContext, mon
             obj.project_path = project_path
             return obj
 
-        async def promote_reference_step2_draft(self, episode: int):
+        async def promote_reference_step2_draft(self, episode: int, *, expected_fingerprint=None):
+            seen["expected_fingerprint"] = expected_fingerprint
             return self.project_path / "scripts" / f"episode_{episode}.json"
 
     monkeypatch.setattr(mod, "ScriptGenerator", _FakeGenerator)
     out = await _promote(fake_ctx)
     assert out.get("is_error") is not True, out
     assert "episode_1.json" in out["content"][0]["text"]
+    assert seen["expected_fingerprint"] == "formal-baseline"
 
 
 async def test_promote_draft_refuses_after_mode_switch(fake_ctx: ToolContext) -> None:

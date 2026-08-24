@@ -36,7 +36,7 @@ from lib.draft_quarantine import (
 from lib.draft_violation import DraftViolation
 from lib.episode_paths import STEP1_FILENAMES, episode_drafts_dir, episode_script_filename
 from lib.json_io import atomic_write_json, load_json_or_none
-from lib.project_manager import ProjectManager
+from lib.project_manager import ProjectManager, ScriptWriteConflict
 from lib.script_generator import ScriptGenerator
 from lib.script_models import (
     NarrationStep1Draft,
@@ -318,6 +318,26 @@ def _render_step1_conflict_report(
         f"处置：调用 open_draft 读取当前草稿与 formal_revision，对照上方最新内容合并 {field_hint}；"
         "再调用 patch_draft 提交完整 content，并把 formal_revision 作为 accept_formal_revision；"
         f'最后调用 {PROMOTE_TOOL_NAME}({{"episode": {episode}, "doc_type": "{doc_type}"}}) 重新晋升。'
+    )
+
+
+def _render_step2_conflict_report(
+    episode: int,
+    draft: QuarantinedDraft,
+    conflict: ScriptWriteConflict,
+) -> str:
+    latest = (
+        json.dumps(conflict.current_content, ensure_ascii=False, indent=2)
+        if conflict.current_content is not None
+        else "null"
+    )
+    return (
+        "❌ 晋升中止（并发冲突）：正式剧本在本草稿产出后已被修改，本次未写盘、草稿仍在场。\n"
+        f"草稿基线指纹: {json.dumps(conflict.expected)}；盘上现值指纹: {json.dumps(conflict.actual)}\n\n"
+        f"当前正式剧本的最新内容：\n{latest}\n\n"
+        "处置：调用 open_draft 读取当前草稿与 formal_revision，合并最新正式内容；"
+        "再调用 patch_draft 提交完整 content，并把 formal_revision 作为 accept_formal_revision；"
+        f'最后调用 {PROMOTE_TOOL_NAME}({{"episode": {episode}, "doc_type": "reference_step2"}}) 重新晋升。'
     )
 
 
@@ -980,7 +1000,14 @@ class DraftWorkflow:
                         "title": script.get("title") or f"第{episode}集",
                         "units": [{"text": unit.get("text", "")} for unit in units if isinstance(unit, dict)],
                     }
-                    write_quarantine(self.ctx.project_path, episode, resolved, content=content, violations=[])
+                    write_quarantine(
+                        self.ctx.project_path,
+                        episode,
+                        resolved,
+                        content=content,
+                        violations=[],
+                        meta={"base_fingerprint": script_review.content_fingerprint_of_data(script)},
+                    )
             else:
                 await _STEP1_EDIT_OPENERS[resolved](self.ctx, episode, source)
         except DraftWorkflowError:
@@ -1002,7 +1029,7 @@ class DraftWorkflow:
     ) -> dict[str, Any]:
         resolved = self._kind(episode, doc_type)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
-        with ProjectManager(str(self.ctx.projects_root)).file_lock(path):
+        async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
             draft = read_quarantine(self.ctx.project_path, episode, resolved)
             if draft is None:
                 return self._read(episode, resolved)
@@ -1066,9 +1093,18 @@ class DraftWorkflow:
                             else {}
                         ),
                     )
-                    result_path = await generator.promote_reference_step2_draft(episode)
+                    promote_kwargs = (
+                        {"expected_fingerprint": draft.meta["base_fingerprint"]}
+                        if "base_fingerprint" in draft.meta
+                        else {}
+                    )
+                    result_path = await generator.promote_reference_step2_draft(episode, **promote_kwargs)
             except DraftWorkflowError:
                 raise
+            except ScriptWriteConflict as exc:
+                raise DraftWorkflowError(
+                    "formal_revision_conflict", _render_step2_conflict_report(episode, draft, exc)
+                ) from exc
             except DraftViolation as exc:
                 raise DraftWorkflowError("draft_invalid", str(exc)) from exc
             except Exception as exc:  # noqa: BLE001

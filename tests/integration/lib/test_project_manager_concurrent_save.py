@@ -6,13 +6,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from lib.project_manager import ProjectManager
+import pytest
+
+from lib.content_digest import canonical_json_digest
+from lib.project_manager import ProjectManager, ScriptWriteConflict
 from lib.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
 from server.services.project_archive import ProjectArchiveService
 
@@ -62,6 +66,56 @@ def _make_script(episode: int, payload_size: int) -> dict:
 
 
 class TestSaveScriptConcurrency:
+    async def test_async_file_lock_wait_keeps_event_loop_responsive(self, tmp_path: Path) -> None:
+        pm = ProjectManager(tmp_path)
+        path = tmp_path / "draft.json"
+        held = threading.Event()
+        release = threading.Event()
+
+        def hold_lock() -> None:
+            with pm.file_lock(path):
+                held.set()
+                release.wait(timeout=5)
+
+        holder = threading.Thread(target=hold_lock)
+        holder.start()
+        assert await asyncio.to_thread(held.wait, 1)
+
+        entered = asyncio.Event()
+
+        async def contend() -> None:
+            async with pm.async_file_lock(path):
+                entered.set()
+
+        task = asyncio.create_task(contend())
+        await asyncio.sleep(0.1)
+        assert not entered.is_set()
+        release.set()
+        await asyncio.wait_for(task, timeout=1)
+        holder.join(timeout=1)
+
+    def test_save_script_rejects_stale_expected_fingerprint(self, tmp_path: Path) -> None:
+        pm = ProjectManager(tmp_path)
+        name = "proj-occ"
+        _seed_project(pm, name)
+        path = pm.save_script(name, _make_script(1, payload_size=4), "episode_1.json")
+        baseline = canonical_json_digest(json.loads(path.read_text(encoding="utf-8")))
+
+        newer = _make_script(1, payload_size=5)
+        pm.save_script(name, newer, "episode_1.json")
+
+        with pytest.raises(ScriptWriteConflict) as caught:
+            pm.save_script(
+                name,
+                _make_script(1, payload_size=6),
+                "episode_1.json",
+                expected_fingerprint=baseline,
+            )
+
+        assert caught.value.expected == baseline
+        assert caught.value.actual == canonical_json_digest(pm.load_script(name, "episode_1.json"))
+        assert len(pm.load_script(name, "episode_1.json")["segments"]) == 5
+
     def test_concurrent_save_script_no_corruption(self, tmp_path: Path) -> None:
         """并发写入同一 script 文件，最终应可被 json.load 成功解析。"""
         pm = ProjectManager(tmp_path)

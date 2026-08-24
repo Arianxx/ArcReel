@@ -97,6 +97,7 @@ from lib.script_models import (
 )
 from lib.script_review import (
     SCRIPT_STEP1_REVISION_FIELD,
+    content_fingerprint,
     content_fingerprint_of_data,
     gate_blocks_step2,
     migrate_step1_draft_in_place,
@@ -110,6 +111,13 @@ from lib.text_utils import strip_json_code_fences
 from lib.video_backends.registry import video_capabilities_for_model as builtin_video_capabilities_for_model
 
 logger = logging.getLogger(__name__)
+
+
+class _UnsetExpectedFingerprint:
+    pass
+
+
+_UNSET_EXPECTED_FINGERPRINT = _UnsetExpectedFingerprint()
 
 # drama step1 时长的归一化口径：与 DramaSceneContent.duration_seconds（非 strict int）同一套，
 # 避免校验侧与落盘侧对 "4" / 4.0 这类取值判断不一致。默认值也取字段声明，不另写字面量。
@@ -1313,18 +1321,27 @@ class ScriptGenerator:
         返回而不是自己抛：调用点用 ``raise ... from exc`` 保留原始违约链，异常在此被构造却在
         彼处抛出会让 traceback 指向本函数而非合并逻辑。
         """
-        return DraftViolation(
-            quarantine_and_report(
+        draft_path = quarantine_path(self.project_path, episode, QUARANTINE_KIND_STEP2)
+        formal_path = self.project_path / "scripts" / episode_script_filename(episode)
+        pm = ProjectManager(str(self.project_path.parent))
+        with pm.file_lock(draft_path), pm.file_lock(formal_path):
+            report = quarantine_and_report(
                 self.project_path,
                 episode,
                 QUARANTINE_KIND_STEP2,
                 content=self._step2_flat_content(response_text, episode),
                 violations=violation_items(exc),
-            ),
-            code="quarantined",
-        )
+                meta={"base_fingerprint": content_fingerprint(formal_path)},
+            )
+        return DraftViolation(report, code="quarantined")
 
-    async def promote_reference_step2_draft(self, episode: int, output_filename: str | None = None) -> Path:
+    async def promote_reference_step2_draft(
+        self,
+        episode: int,
+        output_filename: str | None = None,
+        *,
+        expected_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
+    ) -> Path:
         """按产出时那套校验器全量重判 step2 待修复草稿，通过则晋升为正式剧本并清除草稿。
 
         重判用的是 ``_merge_reference_visual`` 本身，不是它的简化副本：晋升口径与产出口径必须
@@ -1370,6 +1387,7 @@ class ScriptGenerator:
                     QUARANTINE_KIND_STEP2,
                     content=draft.content,
                     violations=violation_items(exc),
+                    meta=draft.meta,
                 ),
                 code="quarantined",
             ) from exc
@@ -1388,18 +1406,25 @@ class ScriptGenerator:
                             code="schema_invalid",
                         )
                     ],
+                    meta=draft.meta,
                 ),
                 code="quarantined",
             ) from exc
 
         filename = output_filename or episode_script_filename(episode)
         pm = ProjectManager(str(self.project_path.parent))
+        save_kwargs: dict[str, str | None] = (
+            {}
+            if isinstance(expected_fingerprint, _UnsetExpectedFingerprint)
+            else {"expected_fingerprint": expected_fingerprint}
+        )
         output_path = pm.save_script(
             self.project_path.name,
             script_data,
             filename,
             validate=True,
             artifact_basis=self._artifact_basis,
+            **save_kwargs,
         )
         # 落盘成功后才清草稿：写盘失败时草稿还在，重试晋升即可，不会两头皆空。
         clear_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)

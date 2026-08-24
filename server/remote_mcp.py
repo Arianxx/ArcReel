@@ -7,14 +7,14 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent
-from pydantic import AnyHttpUrl, BaseModel
+from pydantic import AnyHttpUrl, BaseModel, Field
 from starlette.responses import PlainTextResponse
 from starlette.types import Receive, Scope, Send
 
@@ -77,6 +77,7 @@ from server.tool_runtime import (
 )
 
 DraftDocType = Literal["drama_step1", "narration_step1", "reference_step1", "reference_step2"]
+PositiveEpisode = Annotated[int, Field(strict=True, ge=1)]
 
 _LOCAL_HOSTS = ["127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*", "[::1]", "[::1]:*"]
 _LOCAL_ORIGINS = [
@@ -309,7 +310,7 @@ def build_remote_mcp_server(
     @server.tool(name="generate_episode_script", structured_output=False)
     async def remote_generate_episode_script(
         project: str,
-        episode: int,
+        episode: PositiveEpisode,
         instructions: str | None = None,
         dry_run: bool = False,
     ) -> CallToolResult:
@@ -328,7 +329,7 @@ def build_remote_mcp_server(
     @server.tool(name="generate_step1", structured_output=False)
     async def remote_generate_step1(
         project: str,
-        episode: int,
+        episode: PositiveEpisode,
         source: str | None = None,
         instructions: str | None = None,
         dry_run: bool = False,

@@ -17,6 +17,7 @@ from lib.draft_quarantine import (
     quarantine_path,
     write_quarantine,
 )
+from lib.project_manager import ProjectManager, ScriptWriteConflict
 from lib.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
 from lib.reference_video.draft_validation import DraftViolation
 from lib.reference_video.text_parser import extract_mentions
@@ -849,6 +850,7 @@ async def test_step2_violation_quarantines_instead_of_discarding(reference_proje
 
     envelope = _json.loads(_step2_quarantine(reference_project).read_text(encoding="utf-8"))
     assert envelope["kind"] == QUARANTINE_KIND_STEP2
+    assert envelope["meta"]["base_fingerprint"] is None
     assert [v["code"] for v in envelope["violations"]] == ["unregistered_asset"]
     # 草稿装的是扁平草稿结构（Agent 要改的是其中的正文 / 原文锚 / 时长）
     assert envelope["content"]["units"][0]["text"] == BAD_STEP2_UNIT_TEXT
@@ -875,6 +877,37 @@ async def test_promote_step2_draft_after_repair(reference_project: Path):
     assert unit["unit_id"] == "E1U01"
     assert unit["duration_seconds"] == 4
     assert extract_mentions(unit["text"]) == ["主角", "酒馆"]
+
+
+@pytest.mark.asyncio
+async def test_promote_step2_draft_rejects_stale_formal_baseline(reference_project: Path):
+    formal = await ScriptGenerator(reference_project, generator=_fake_step2_generator(STEP2_UNIT_TEXT)).generate(
+        episode=1
+    )
+    baseline = script_review.content_fingerprint(formal)
+    assert baseline is not None
+    write_quarantine(
+        reference_project,
+        1,
+        QUARANTINE_KIND_STEP2,
+        content={"title": "修复稿", "units": [{"text": STEP2_UNIT_TEXT}]},
+        violations=[],
+        meta={"base_fingerprint": baseline},
+    )
+
+    pm = ProjectManager(str(reference_project.parent))
+    concurrent = pm.load_script(reference_project.name, formal.name)
+    concurrent["title"] = "并发修改"
+    pm.save_script(reference_project.name, concurrent, formal.name)
+
+    with pytest.raises(ScriptWriteConflict):
+        await ScriptGenerator(reference_project).promote_reference_step2_draft(
+            episode=1,
+            expected_fingerprint=baseline,
+        )
+
+    assert pm.load_script(reference_project.name, formal.name)["title"] == "并发修改"
+    assert _step2_quarantine(reference_project).exists()
 
 
 @pytest.mark.asyncio

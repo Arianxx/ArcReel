@@ -404,6 +404,23 @@ async def test_remote_mcp_text_generation_and_script_patch_return_structured_con
     assert patched.structuredContent["script_patch"]["problems"][0]["code"] == "revision_conflict"
 
 
+@pytest.mark.parametrize("tool", ["generate_step1", "generate_episode_script"])
+async def test_remote_mcp_generation_rejects_non_positive_episode(remote_server, tool: str) -> None:
+    app = _mounted(remote_server)
+    async with remote_server.session_manager.run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            headers={"Authorization": "Bearer arc-valid"},
+            follow_redirects=True,
+        ) as client:
+            async with streamable_http_client("http://localhost/mcp", http_client=client) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    result = await session.call_tool(tool, {"project": "demo", "episode": 0, "dry_run": True})
+
+    assert result.isError
+
+
 async def test_remote_mcp_draft_preserves_explicit_null_updates(remote_server, remote_projects) -> None:
     app = _mounted(remote_server)
     async with remote_server.session_manager.run():
