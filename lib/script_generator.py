@@ -577,6 +577,7 @@ class ScriptGenerator:
                     episode,
                     response_text,
                     exc,
+                    base_fingerprint=formal_baseline,
                     expected_draft_revision=step2_draft_baseline,
                 ) from exc
         else:
@@ -601,6 +602,7 @@ class ScriptGenerator:
                 episode,
                 response_text,
                 exc,
+                base_fingerprint=formal_baseline,
                 expected_draft_revision=step2_draft_baseline,
             ) from exc
 
