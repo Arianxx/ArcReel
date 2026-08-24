@@ -660,37 +660,44 @@ async def test_promote_reference_step1_preserves_step2_draft_when_content_unchan
 async def test_promote_draft_step2_uses_async_factory(fake_ctx: ToolContext, monkeypatch) -> None:
     """step2 晋升走 ``ScriptGenerator.create``：晋升同样经 _add_metadata 落盘，裸构造会把
     metadata.generator 记成 "unknown"，与直接生成路径的同一份产物对不上。"""
-    from server import draft_workflow as mod
+    from lib.text_generator import TextGenerator
 
+    _rv_source(fake_ctx)
+    split = await _run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[张三] 在 @[村口] 等候")])
+    assert split.get("is_error") is not True, split
+    project = fake_ctx.pm.project_payload  # pyright: ignore[reportAttributeAccessIssue]
+    project["episodes"][0]["step1_review"] = {
+        "fingerprint": script_review.content_fingerprint(_rv_step1_path(fake_ctx)),
+        "confirmed_at": "2026-08-24T00:00:00Z",
+    }
+    (fake_ctx.project_path / "project.json").write_text(
+        json.dumps(project, ensure_ascii=False),
+        encoding="utf-8",
+    )
     write_quarantine(
         fake_ctx.project_path,
         1,
         QUARANTINE_KIND_STEP2,
-        content={"title": "第1集", "units": [{"text": "@[张三] 起身"}]},
+        content={"title": "第1集", "units": [{"text": "镜头1：中景，平视。@[张三] 在 @[村口] 等候。"}]},
         violations=[],
-        meta={"base_fingerprint": "formal-baseline"},
     )
     seen: dict[str, object] = {}
 
-    class _FakeGenerator:
-        def __init__(self, _path) -> None:
-            raise AssertionError("晋升不得裸构造 ScriptGenerator")
+    class _TextBoundary:
+        model = "review-factory"
 
-        @classmethod
-        async def create(cls, project_path, **_kwargs):
-            obj = cls.__new__(cls)
-            obj.project_path = project_path
-            return obj
+    async def create_text_generator(task_type, project_name=None):
+        seen["task_type"] = task_type
+        seen["project_name"] = project_name
+        return _TextBoundary()
 
-        async def promote_reference_step2_draft(self, episode: int, *, expected_fingerprint=None):
-            seen["expected_fingerprint"] = expected_fingerprint
-            return self.project_path / "scripts" / f"episode_{episode}.json"
-
-    monkeypatch.setattr(mod, "ScriptGenerator", _FakeGenerator)
+    monkeypatch.setattr(TextGenerator, "create", create_text_generator)
     out = await _promote(fake_ctx)
     assert out.get("is_error") is not True, out
     assert "episode_1.json" in out["content"][0]["text"]
-    assert seen["expected_fingerprint"] == "formal-baseline"
+    saved = json.loads((fake_ctx.project_path / "scripts" / "episode_1.json").read_text(encoding="utf-8"))
+    assert saved["metadata"]["generator"] == "review-factory"
+    assert seen["project_name"] == fake_ctx.project_name
 
 
 async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
@@ -798,14 +805,12 @@ async def test_promote_draft_refuses_after_mode_switch(fake_ctx: ToolContext) ->
     )
 
 
-async def test_promote_draft_step2_blocked_by_review_gate(fake_ctx: ToolContext, monkeypatch) -> None:
+async def test_promote_draft_step2_blocked_by_review_gate(fake_ctx: ToolContext) -> None:
     """step1 未经确认时 step2 草稿不晋升：常规生成路径在工具入口就被内容确认拦下，两条路不该分叉。
 
     草稿在场期间用户在 Web 端改过 step1 会让确认指纹失效，该集回到 pending_review——此时晋升等于
     拿一份用户没确认过的 step1 合成正式剧本。
     """
-    from server import text_generation as mod
-
     _rv_project(fake_ctx)
     step1 = _rv_step1_path(fake_ctx)
     step1.parent.mkdir(parents=True, exist_ok=True)
@@ -817,7 +822,8 @@ async def test_promote_draft_step2_blocked_by_review_gate(fake_ctx: ToolContext,
         content={"title": "第1集", "units": [{"text": "@[张三] 起身"}]},
         violations=[],
     )
-    monkeypatch.setattr(mod.script_review, "gate_blocks_step2", lambda *_args, **_kw: True)
+    project = json.loads((fake_ctx.project_path / "project.json").read_text(encoding="utf-8"))
+    assert script_review.review_status(fake_ctx.project_path, project, 1) == "pending_review"
 
     out = await _promote(fake_ctx)
     assert out.get("is_error") is True

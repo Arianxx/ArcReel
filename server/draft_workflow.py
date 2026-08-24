@@ -1167,7 +1167,11 @@ class DraftWorkflow:
                         if "base_fingerprint" in draft.meta
                         else {}
                     )
-                    result_path = await generator.promote_reference_step2_draft(episode, **promote_kwargs)
+                    result_path = await generator.promote_reference_step2_draft(
+                        episode,
+                        _step2_lock_held=True,
+                        **promote_kwargs,
+                    )
             except DraftWorkflowError:
                 raise
             except ScriptWriteConflict as exc:

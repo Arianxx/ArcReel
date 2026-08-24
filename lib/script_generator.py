@@ -10,6 +10,7 @@ import json
 import logging
 import re
 from collections import Counter
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -977,7 +978,13 @@ class ScriptGenerator:
         self._freeze_step1_input_claim(episode, step1_path, content_digest=hashlib.sha256(raw).hexdigest())
         return text
 
-    def _load_reference_step1(self, episode: int, supported_durations: list[int]) -> list[dict]:
+    def _load_reference_step1(
+        self,
+        episode: int,
+        supported_durations: list[int],
+        *,
+        _step2_lock_held: bool = False,
+    ) -> list[dict]:
         """加载并校验 reference_video step1 结构化中间文件 ``step1_reference_units.json``。
 
         返回 unit dict 列表（unit_id / text / duration_seconds），供 step2 prompt 渲染
@@ -1015,7 +1022,8 @@ class ScriptGenerator:
         # 与 server.services.script_review / save_content 共享同一把 per-path 锁：
         # 迁移的读改写与 Web 端保存、重拆分写盘相互互斥。
         step2_path = quarantine_path(self.project_path, episode, QUARANTINE_KIND_STEP2)
-        with pm.file_lock(step2_path), pm.file_lock(step1_json):
+        step2_lock = nullcontext() if _step2_lock_held else pm.file_lock(step2_path)
+        with step2_lock, pm.file_lock(step1_json):
             # 顺序不变量：内容确认的判定在更早的 step2 工具入口完成，迁移在其后运行且可能
             # 改写时长。先记下迁移前的放行状态，供迁移后判断放行依据是否已失效。放行状态与
             # 草稿在同一临界区内读取，两者才描述同一时刻——锁外读则并发的保存/确认会让它
@@ -1414,6 +1422,26 @@ class ScriptGenerator:
         output_filename: str | None = None,
         *,
         expected_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
+        _step2_lock_held: bool = False,
+    ) -> Path:
+        draft_path = quarantine_path(self.project_path, episode, QUARANTINE_KIND_STEP2)
+        pm = ProjectManager(str(self.project_path.parent))
+        step2_lock = nullcontext() if _step2_lock_held else pm.file_lock(draft_path)
+        with step2_lock:
+            return self._promote_reference_step2_draft_locked_sync(
+                episode,
+                caps,
+                output_filename,
+                expected_fingerprint=expected_fingerprint,
+            )
+
+    def _promote_reference_step2_draft_locked_sync(
+        self,
+        episode: int,
+        caps: dict | None,
+        output_filename: str | None = None,
+        *,
+        expected_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
     ) -> Path:
         draft = read_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)
         if draft is None:
@@ -1425,6 +1453,7 @@ class ScriptGenerator:
         step1_units = self._load_reference_step1(
             episode,
             self._resolve_raw_supported_durations(caps),
+            _step2_lock_held=True,
         )
         # 与产出路径同一份 step1 预判：草稿在场期间 Web 端可能改过 step1（编辑器对人写正文只出
         # warning），不复判就会让改短时长后念不完的台词、或未登记的 @[名称] 借晋升一路落盘。
@@ -1503,6 +1532,7 @@ class ScriptGenerator:
         output_filename: str | None = None,
         *,
         expected_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
+        _step2_lock_held: bool = False,
     ) -> Path:
         """按产出时那套校验器全量重判 step2 待修复草稿，通过则晋升为正式剧本并清除草稿。
 
@@ -1520,6 +1550,7 @@ class ScriptGenerator:
             caps,
             output_filename,
             expected_fingerprint=expected_fingerprint,
+            _step2_lock_held=_step2_lock_held,
         )
 
     def _parse_response(self, response_text: str, episode: int) -> dict:
