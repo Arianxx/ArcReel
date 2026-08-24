@@ -92,7 +92,7 @@ class TextGenerationRequest:
     dry_run: bool = False
 
     def __post_init__(self) -> None:
-        if isinstance(self.episode, bool) or self.episode < 1:
+        if isinstance(self.episode, bool) or not isinstance(self.episode, int) or self.episode < 1:
             raise ValueError("episode must be a positive integer")
 
 

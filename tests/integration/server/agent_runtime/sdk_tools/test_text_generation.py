@@ -132,8 +132,12 @@ async def test_generate_step1_rejects_inapplicable_content_modes(fake_ctx: ToolC
 @pytest.mark.parametrize("factory", [generate_episode_script_tool, generate_step1_tool])
 def test_generation_tools_require_positive_episode(fake_ctx: ToolContext, factory) -> None:
     assert factory(fake_ctx).input_schema["properties"]["episode"]["minimum"] == 1
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, 1.5, "1"])
+def test_text_generation_request_rejects_non_positive_or_non_integer_episode(bad: Any) -> None:
     with pytest.raises(ValueError, match="positive integer"):
-        TextGenerationRequest(episode=0)
+        TextGenerationRequest(episode=bad)
 
 
 async def test_generate_episode_script_dry_run(fake_ctx: ToolContext, monkeypatch) -> None:

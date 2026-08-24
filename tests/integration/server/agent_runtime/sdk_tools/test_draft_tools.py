@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 
@@ -478,7 +479,9 @@ async def test_patch_draft_can_accept_a_merged_formal_revision(fake_ctx: ToolCon
     assert promoted.get("is_error") is not True, promoted
 
 
-async def test_patch_draft_revision_covers_source_metadata(fake_ctx: ToolContext) -> None:
+async def test_patch_draft_revision_covers_source_metadata(fake_ctx: ToolContext, monkeypatch) -> None:
+    from server import draft_workflow as mod
+
     _rv_source(fake_ctx)
     (fake_ctx.project_path / "source" / "episode_2.txt").write_text(_RV_NOVEL, encoding="utf-8")
     _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
@@ -489,6 +492,14 @@ async def test_patch_draft_revision_covers_source_metadata(fake_ctx: ToolContext
         "content": opened["content"],
         "base_revision": opened["revision"],
     }
+    original_to_thread = asyncio.to_thread
+    offloaded: list[str] = []
+
+    async def observed_to_thread(function, /, *args, **kwargs):
+        offloaded.append(function.__name__)
+        return await original_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(mod.asyncio, "to_thread", observed_to_thread)
 
     first = _draft_result(await _call(patch_draft_tool(fake_ctx), {**args, "source": "source/episode_2.txt"}))
     stale = await _call(patch_draft_tool(fake_ctx), {**args, "source": "source/episode_1.txt"})
@@ -496,6 +507,7 @@ async def test_patch_draft_revision_covers_source_metadata(fake_ctx: ToolContext
     assert first["revision"] != opened["revision"]
     assert stale.get("is_error") is True
     assert "revision_conflict" in stale["content"][0]["text"]
+    assert offloaded == ["_load_novel_source"]
 
 
 async def test_discard_draft_rejects_stale_revision(fake_ctx: ToolContext) -> None:

@@ -1043,7 +1043,7 @@ class DraftWorkflow:
             if updates_source:
                 if resolved == QUARANTINE_KIND_STEP2:
                     raise DraftWorkflowError("invalid_request", "source is only valid for step1 drafts")
-                _load_novel_source(self.ctx.project_path, source)
+                await asyncio.to_thread(_load_novel_source, self.ctx.project_path, source)
                 meta = {**meta, "source": source}
             if accepts_formal_revision:
                 actual_formal_revision = script_review.content_fingerprint(self._formal_path(episode, resolved))
