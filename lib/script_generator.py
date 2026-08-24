@@ -29,7 +29,7 @@ from lib.artifact_provenance import (
     build_episode_script_basis,
     project_ad_episode_script_inputs,
 )
-from lib.asyncio_utils import run_sync_transaction
+from lib.async_thread import run_sync_transaction
 from lib.backend_assembly.specs import get_provider_spec
 from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.resolver import (

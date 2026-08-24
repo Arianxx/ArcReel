@@ -28,7 +28,7 @@ from lib.asset_inventory import (
     complete_asset_inventory as complete_asset_inventory_service,
 )
 from lib.asset_types import ASSET_SPECS
-from lib.asyncio_utils import run_sync_transaction as _run_sync_transaction
+from lib.async_thread import run_sync_transaction as _run_sync_transaction
 from lib.config.resolver import ConfigResolver
 from lib.content_digest import prefixed, prefixed_canonical_json_digest
 from lib.episode_paths import (

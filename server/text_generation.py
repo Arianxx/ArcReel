@@ -8,6 +8,7 @@ import logging
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NamedTuple, cast
@@ -18,7 +19,7 @@ from lib import script_review
 from lib.artifact_manifest import ArtifactBasis
 from lib.artifact_provenance import Step1PromptVariant, build_step1_request
 from lib.asset_types import BUCKET_KEY, asset_name_comparison_key, normalize_asset_bucket
-from lib.asyncio_utils import run_sync_transaction
+from lib.async_thread import run_sync_transaction
 from lib.config.resolver import ConfigResolver
 from lib.content_digest import prefixed_sha256_file
 from lib.custom_provider.duration_presets import DEFAULT_FALLBACK
@@ -153,7 +154,10 @@ def _commit_generated_reference_step1(
     content: dict[str, Any],
     expected_fingerprint: str | None,
     basis: ArtifactBasis,
+    before_commit: Callable[[], None] | None = None,
 ) -> None:
+    if before_commit is not None:
+        before_commit()
     script_review.write_step1(
         project_path,
         episode,
@@ -1007,6 +1011,7 @@ async def generate_reference_step1(
     project_name: str,
     projects: ProjectManager,
     config_resolver: ConfigResolver,
+    before_commit: Callable[[], None] | None = None,
 ) -> TextGenerationResult:
     episode = request.episode
     instructions = _instructions(request.instructions)
@@ -1121,6 +1126,7 @@ async def generate_reference_step1(
                     {"units": raw_units},
                     formal_baseline,
                     step1_basis,
+                    before_commit,
                 )
             except script_review.Step1WriteConflict as exc:
                 raise TextGenerationError(

@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from lib import script_review
 from lib.artifact_manifest import ArtifactBasis
-from lib.asyncio_utils import run_sync_transaction
+from lib.async_thread import run_sync_transaction
 from lib.config.resolver import ConfigResolver
 from lib.draft_quarantine import (
     DOC_TYPE_TO_QUARANTINE_KIND,
@@ -229,7 +229,10 @@ def _commit_reference_step1(
     content: dict[str, Any],
     expected_fingerprint: Any,
     basis: ArtifactBasis | None,
+    before_commit: Callable[[], None] | None = None,
 ) -> None:
+    if before_commit is not None:
+        before_commit()
     script_review.write_step1(
         project_path,
         episode,
@@ -240,7 +243,13 @@ def _commit_reference_step1(
     clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
 
 
-async def _promote_reference_step1(ctx: DraftContext, episode: int, draft: QuarantinedDraft) -> None:
+async def _promote_reference_step1(
+    ctx: DraftContext,
+    episode: int,
+    draft: QuarantinedDraft,
+    *,
+    before_commit: Callable[[], None] | None = None,
+) -> None:
     """按产出时那套校验器全量重判 step1 草稿，通过则晋升为正式 step1 并清除草稿。"""
     project_path = ctx.project_path
     project = ctx.pm.load_project(ctx.project_name)
@@ -291,6 +300,7 @@ async def _promote_reference_step1(ctx: DraftContext, episode: int, draft: Quara
             {"units": units},
             expected,
             revalidation.basis,
+            before_commit,
         )
     except script_review.Step1WriteConflict as conflict:
         raise DraftWorkflowError(
@@ -1087,9 +1097,16 @@ class DraftWorkflow:
                     "content": content,
                 },
             )
-        return self._read(episode, resolved)
+            return self._read(episode, resolved)
 
-    async def promote(self, episode: int, doc_type: str, base_revision: str) -> dict[str, Any]:
+    async def promote(
+        self,
+        episode: int,
+        doc_type: str,
+        base_revision: str,
+        *,
+        before_commit: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
         resolved = self._kind(episode, doc_type)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
         result_path: Path | None = None
@@ -1107,7 +1124,7 @@ class DraftWorkflow:
                 if resolved in _SINGLE_STEP1_PROMOTERS:
                     await _SINGLE_STEP1_PROMOTERS[resolved](self.ctx, episode, draft)
                 elif resolved == QUARANTINE_KIND_STEP1:
-                    await _promote_reference_step1(self.ctx, episode, draft)
+                    await _promote_reference_step1(self.ctx, episode, draft, before_commit=before_commit)
                 else:
                     project = self.ctx.pm.load_project(self.ctx.project_name)
                     if script_review.gate_blocks_step2(self.ctx.project_path, project, episode):

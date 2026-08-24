@@ -15,7 +15,9 @@ from lib.draft_quarantine import (
     QUARANTINE_KIND_NARRATION_STEP1,
     QUARANTINE_KIND_STEP1,
     QUARANTINE_KIND_STEP2,
+    draft_revision,
     quarantine_path,
+    read_quarantine,
     write_quarantine,
 )
 from lib.project_manager import ProjectManager
@@ -33,6 +35,8 @@ from server.agent_runtime.sdk_tools.text_generation import (
     patch_draft_tool,
     promote_draft_tool,
 )
+from server.draft_workflow import DraftContext, DraftWorkflow
+from server.text_generation import TextGenerationRequest, generate_reference_step1
 from tests.integration.server.agent_runtime.sdk_tools.sdk_tools_support import (
     _RV_NOVEL,
     _call,
@@ -55,6 +59,7 @@ from tests.integration.server.agent_runtime.sdk_tools.sdk_tools_support import (
     _read_nr_quarantine,
     _read_rv_quarantine,
     _run_rv_split,
+    _rv_generator_returning,
     _rv_project,
     _rv_quarantine_path,
     _rv_saved_unit,
@@ -139,29 +144,38 @@ async def test_split_reference_video_units_reports_all_bad_units_in_one_round(
 
 async def test_reference_step1_write_transaction_does_not_block_event_loop(fake_ctx: ToolContext, monkeypatch) -> None:
     _rv_source(fake_ctx)
+    resolver = _use_fake_caps(fake_ctx)
+    from server import text_generation as mod
+
+    monkeypatch.setattr(mod.TextGenerator, "create", _rv_generator_returning([_rv_unit("@[张三] 起身")]))
     started = threading.Event()
     release = threading.Event()
     caller_thread = threading.get_ident()
     worker_threads: list[int] = []
-    original_write = script_review.write_step1
 
-    def blocked_write(*args, **kwargs):
+    def before_commit() -> None:
         worker_threads.append(threading.get_ident())
         started.set()
         assert release.wait(timeout=2)
-        return original_write(*args, **kwargs)
 
-    monkeypatch.setattr(script_review, "write_step1", blocked_write)
-    generation = asyncio.create_task(_run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[张三] 起身")]))
+    generation = asyncio.create_task(
+        generate_reference_step1(
+            TextGenerationRequest(episode=1),
+            project_name=fake_ctx.project_name,
+            projects=fake_ctx.pm,
+            config_resolver=resolver,
+            before_commit=before_commit,
+        )
+    )
     assert await asyncio.to_thread(started.wait, 1)
     ticked = asyncio.Event()
     asyncio.get_running_loop().call_soon(ticked.set)
     await asyncio.wait_for(ticked.wait(), timeout=1)
     release.set()
 
-    out = await generation
+    result = await generation
 
-    assert out.get("is_error") is not True, out
+    assert result.message.startswith("✅")
     assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 
@@ -456,15 +470,30 @@ async def test_cancelled_reference_step1_promotion_finishes_commit_and_cleanup(
     _rv_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
     started = threading.Event()
     release = threading.Event()
-    original_write = script_review.write_step1
 
-    def blocked_write(*args, **kwargs):
+    def before_commit() -> None:
         started.set()
         assert release.wait(timeout=2)
-        return original_write(*args, **kwargs)
 
-    monkeypatch.setattr(script_review, "write_step1", blocked_write)
-    promotion = asyncio.create_task(_promote(fake_ctx))
+    draft = read_quarantine(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP1)
+    assert draft is not None
+    _use_fake_caps(fake_ctx)
+    workflow = DraftWorkflow(
+        DraftContext(
+            project_name=fake_ctx.project_name,
+            projects_root=fake_ctx.projects_root,
+            pm=fake_ctx.pm,
+            config_resolver=fake_ctx.config_resolver,
+        )
+    )
+    promotion = asyncio.create_task(
+        workflow.promote(
+            1,
+            "reference_step1",
+            draft_revision(draft),
+            before_commit=before_commit,
+        )
+    )
     assert await asyncio.to_thread(started.wait, 1)
     promotion.cancel()
     await asyncio.sleep(0)

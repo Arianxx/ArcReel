@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.asyncio_utils import run_sync_transaction
+from lib.async_thread import run_sync_transaction
 from lib.project_manager import ProjectManager
 from lib.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
 from lib.workflow_plan import WorkflowPlanRequest, build_workflow_plan
@@ -190,6 +190,9 @@ async def test_sync_transaction_finishes_worker_before_propagating_cancellation(
 
     task = asyncio.create_task(run_sync_transaction(transaction))
     assert await asyncio.to_thread(started.wait, 1)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
     task.cancel()
     await asyncio.sleep(0)
     assert not task.done()
