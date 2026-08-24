@@ -499,10 +499,10 @@ async def get_episode_script(
     if not isinstance(filename, str) or not filename or "/" in filename or "\\" in filename or filename in {".", ".."}:
         return ToolOutcome(problem=ToolProblem("invalid_request", "script 必须是纯文件名"))
     try:
-        failure = project_migration_failure(scope.project_name, services.projects)
+        failure = await asyncio.to_thread(project_migration_failure, scope.project_name, services.projects)
         if failure is not None:
             return ToolOutcome(problem=ToolProblem(MIGRATION_FAILURE_CODE, failure.reason))
-        script = services.projects.load_script_readonly(scope.project_name, filename)
+        script = await asyncio.to_thread(services.projects.load_script_readonly, scope.project_name, filename)
     except FileNotFoundError as exc:
         return ToolOutcome(problem=ToolProblem("file_not_found", str(exc)))
     except (TypeError, ValueError) as exc:
@@ -1028,10 +1028,9 @@ def _remap_operation_indexes(result: ScriptBatchEditResult, source_indexes: list
     return result.model_copy(update={"problems": tuple(remapped)})
 
 
-async def patch_episode_script(
+def _patch_episode_script_sync(
     request: ToolRequest[PatchEpisodeScriptRequest],
     scope: ProjectScope,
-    _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[ScriptBatchEditResult]:
     try:
@@ -1098,6 +1097,15 @@ async def patch_episode_script(
         fresh_insert_indexes=fresh_insert_indexes,
     )
     return ToolOutcome(value=_remap_operation_indexes(result, source_indexes))
+
+
+async def patch_episode_script(
+    request: ToolRequest[PatchEpisodeScriptRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[ScriptBatchEditResult]:
+    return await asyncio.to_thread(_patch_episode_script_sync, request, scope, services)
 
 
 MAX_INSTRUCTIONS_LEN = 4000

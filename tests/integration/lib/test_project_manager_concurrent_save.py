@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from lib import project_manager as project_manager_module
 from lib.content_digest import canonical_json_digest
 from lib.project_manager import ProjectManager, ScriptWriteConflict
 from lib.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
@@ -66,7 +67,7 @@ def _make_script(episode: int, payload_size: int) -> dict:
 
 
 class TestSaveScriptConcurrency:
-    async def test_async_file_lock_wait_keeps_event_loop_responsive(self, tmp_path: Path) -> None:
+    async def test_async_file_lock_wait_keeps_event_loop_responsive(self, tmp_path: Path, monkeypatch) -> None:
         pm = ProjectManager(tmp_path)
         path = tmp_path / "draft.json"
         held = threading.Event()
@@ -81,14 +82,22 @@ class TestSaveScriptConcurrency:
         holder.start()
         assert await asyncio.to_thread(held.wait, 1)
 
+        attempted = asyncio.Event()
         entered = asyncio.Event()
+        original_lock = project_manager_module.portalocker.lock
+
+        def tracked_lock(*args, **kwargs) -> None:
+            attempted.set()
+            original_lock(*args, **kwargs)
+
+        monkeypatch.setattr(project_manager_module.portalocker, "lock", tracked_lock)
 
         async def contend() -> None:
             async with pm.async_file_lock(path):
                 entered.set()
 
         task = asyncio.create_task(contend())
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(attempted.wait(), timeout=1)
         assert not entered.is_set()
         release.set()
         await asyncio.wait_for(task, timeout=1)

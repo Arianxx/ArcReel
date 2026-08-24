@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,7 @@ from server.tool_runtime import (
 class _Projects:
     def __init__(self, project: dict):
         self.project = project
+        self.load_script_threads: list[int] = []
 
     def load_project(self, name: str) -> dict:
         assert name == "demo"
@@ -47,6 +49,7 @@ class _Projects:
     def load_script(self, name: str, script: str) -> dict:
         assert name == "demo"
         assert script == "episode_1.json"
+        self.load_script_threads.append(threading.get_ident())
         return {"episode": 1, "segments": []}
 
 
@@ -140,6 +143,8 @@ async def test_video_capabilities_returns_typed_domain_outcome() -> None:
 
 async def test_patch_episode_script_returns_typed_revision_conflict() -> None:
     project = {"generation_mode": "storyboard"}
+    projects = _Projects(project)
+    caller_thread = threading.get_ident()
     outcome = await patch_episode_script(
         ToolRequest(
             PatchEpisodeScriptRequest.model_validate(
@@ -152,12 +157,14 @@ async def test_patch_episode_script_returns_typed_revision_conflict() -> None:
         ),
         ProjectScope("demo", Path("/projects")),
         CallerContext(user_id="u1", source="embedded"),
-        Services(projects=_Projects(project), workflow_planner=_Planner(_status()), capabilities=_Capabilities()),
+        Services(projects=projects, workflow_planner=_Planner(_status()), capabilities=_Capabilities()),
     )
 
     assert outcome.problem is None
     assert outcome.value is not None
     assert outcome.value.problems[0].code == "revision_conflict"
+    assert projects.load_script_threads
+    assert all(thread != caller_thread for thread in projects.load_script_threads)
 
 
 def test_text_generation_dependency_points_from_host_adapters_to_shared_handler() -> None:
@@ -200,7 +207,7 @@ async def test_patch_episode_meta_returns_typed_domain_outcome(tmp_path: Path) -
     assert projects.load_script("demo", "episode_1.json")["title"] == "新标题"
 
 
-async def test_content_readers_return_body_and_revision_from_the_same_snapshot(tmp_path: Path) -> None:
+async def test_content_readers_return_body_and_revision_from_the_same_snapshot(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "demo"
     (project_dir / "scripts").mkdir(parents=True)
     (project_dir / "project.json").write_text(
@@ -213,6 +220,15 @@ async def test_content_readers_return_body_and_revision_from_the_same_snapshot(t
     services = Services(projects=projects, workflow_planner=_Planner(_status()), capabilities=_Capabilities())
     scope = ProjectScope("demo", tmp_path)
     caller = CallerContext(user_id="u1", source="mcp")
+    caller_thread = threading.get_ident()
+    reader_threads: list[int] = []
+    original_load_script_readonly = projects.load_script_readonly
+
+    def tracked_load_script_readonly(project_name: str, filename: str) -> dict:
+        reader_threads.append(threading.get_ident())
+        return original_load_script_readonly(project_name, filename)
+
+    monkeypatch.setattr(projects, "load_script_readonly", tracked_load_script_readonly)
 
     project = await get_project_content(ToolRequest(None), scope, caller, services)
     script = await get_episode_script(ToolRequest("episode_1.json"), scope, caller, services)
@@ -225,6 +241,8 @@ async def test_content_readers_return_body_and_revision_from_the_same_snapshot(t
     assert script.value is not None
     assert script.value.script["title"] == "第一集"
     assert script.value.revision.startswith("sha256-v1:")
+    assert reader_threads
+    assert all(thread != caller_thread for thread in reader_threads)
 
 
 async def test_file_readers_share_a_business_file_allowlist_and_reject_symlinks(tmp_path: Path) -> None:
