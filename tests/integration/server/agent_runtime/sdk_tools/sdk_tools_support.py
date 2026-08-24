@@ -208,6 +208,9 @@ class _FakePM:
         self._mirror()
         return self.project_payload
 
+    def load_project_readonly(self, _name: str) -> dict[str, Any]:
+        return self.project_payload
+
     def load_script(self, _name: str, filename: str) -> dict[str, Any]:
         self._mirror(filename)
         return self.script_payload

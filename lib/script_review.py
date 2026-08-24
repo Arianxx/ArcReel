@@ -539,10 +539,10 @@ def migrate_step1_draft_in_place(
 ) -> tuple[dict[str, Any] | None, list[ValidationMessage]]:
     """对已读入内存的 step1 草稿就地做一次性时长收编迁移并回写；返回 ``(最新 project, warnings)``。
 
-    调用方须已持有该文件的排他锁（``step1_write_lock`` / 同路径 ``ProjectManager.file_lock``）
-    ——回写经单一写盘出口 ``write_step1_locked``，与 Web 端保存 / 重拆分写盘同一把 per-path
-    锁。迁移是机械格式收编、不是内容编辑，不作废 step2 草稿；同临界区读改写也无并发
-    窗口，不做基线比对。未发生迁移时不回写，返回 ``(None, [])``。
+    调用方须按「step2 草稿 → 正式 step1」顺序持有两把排他锁；回写经单一写盘出口
+    ``write_step1_locked``，与 Web 端保存 / 重拆分写盘同一把 per-path 锁。迁移是机械格式
+    收编、不是内容编辑，不作废 step2 草稿；同临界区读改写也无并发窗口，不做基线比对。
+    未发生迁移时不回写，返回 ``(None, [])``。
 
     迁移多数情况下是机械格式收编，回写会让内容指纹漂移：经 ``update_project`` 在锁内把该集
     确认指纹平移到迁移后的值（``carry_confirmation_through_migration``），避免已确认分集仅因

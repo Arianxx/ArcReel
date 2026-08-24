@@ -307,11 +307,13 @@ class ScriptGenerator:
 
         # 参考生视频路径先读 step1：本集是否真的带参考图决定要不要施加「参考图↔时长」约束，
         # 故此处先按未收窄的全集校验 unit 时长，收窄后的集合在下方按引用情况解析。
-        step1_units = (
-            self._load_reference_step1(episode, self._resolve_raw_supported_durations(caps))
-            if gen_mode == "reference_video"
-            else None
-        )
+        step1_units = None
+        if gen_mode == "reference_video":
+            step1_units = await asyncio.to_thread(
+                self._load_reference_step1,
+                episode,
+                self._resolve_raw_supported_durations(caps),
+            )
 
         # 解析一次时长能力：reference 据此构造 duration 枚举硬约束 schema；
         # narration 两段式用于校验 step1 各分镜时长成员合法（step2 不再产出时长）。
@@ -714,7 +716,11 @@ class ScriptGenerator:
         if gen_mode == "reference_video":
             # unit 时长按全集校验（见 generate() 同位置说明）；step2 不产出时长，prompt
             # 只需参考图上限。
-            step1_units = self._load_reference_step1(episode, self._resolve_raw_supported_durations(caps))
+            step1_units = await asyncio.to_thread(
+                self._load_reference_step1,
+                episode,
+                self._resolve_raw_supported_durations(caps),
+            )
             prompt = build_reference_video_prompt(
                 project_overview=self.project_json.get("overview", {}),
                 style=self.project_json.get("style", ""),
@@ -1008,7 +1014,8 @@ class ScriptGenerator:
         pm = ProjectManager(str(self.project_path.parent))
         # 与 server.services.script_review / save_content 共享同一把 per-path 锁：
         # 迁移的读改写与 Web 端保存、重拆分写盘相互互斥。
-        with pm.file_lock(step1_json):
+        step2_path = quarantine_path(self.project_path, episode, QUARANTINE_KIND_STEP2)
+        with pm.file_lock(step2_path), pm.file_lock(step1_json):
             # 顺序不变量：内容确认的判定在更早的 step2 工具入口完成，迁移在其后运行且可能
             # 改写时长。先记下迁移前的放行状态，供迁移后判断放行依据是否已失效。放行状态与
             # 草稿在同一临界区内读取，两者才描述同一时刻——锁外读则并发的保存/确认会让它
@@ -1424,7 +1431,11 @@ class ScriptGenerator:
             )
 
         caps = await self._fetch_video_capabilities()
-        step1_units = self._load_reference_step1(episode, self._resolve_raw_supported_durations(caps))
+        step1_units = await asyncio.to_thread(
+            self._load_reference_step1,
+            episode,
+            self._resolve_raw_supported_durations(caps),
+        )
         # 与产出路径同一份 step1 预判：草稿在场期间 Web 端可能改过 step1（编辑器对人写正文只出
         # warning），不复判就会让改短时长后念不完的台词、或未登记的 @[名称] 借晋升一路落盘。
         self._assert_reference_step1_ready(step1_units, caps=caps, gen_mode="reference_video")

@@ -401,16 +401,16 @@ class ProjectManager:
         name = self.normalize_project_name(name)
         project_dir = self.projects_root / name
 
-        if project_dir.exists():
-            raise FileExistsError(f"项目 '{name}' 已存在")
-
-        # 创建所有子目录
-        for subdir in self.SUBDIRS:
-            (project_dir / subdir).mkdir(parents=True, exist_ok=True)
+        try:
+            project_dir.mkdir()
+        except FileExistsError as exc:
+            raise FileExistsError(f"项目 '{name}' 已存在") from exc
 
         # 持久化 content_mode 到 project.json，让后续 sync_all_agent_profiles 启动遍历能恢复模式。
         # server 路径随后会调 create_project_metadata 覆盖为完整版（也含 content_mode）。
         try:
+            for subdir in self.SUBDIRS:
+                (project_dir / subdir).mkdir(exist_ok=True)
             atomic_write_json(project_dir / self.PROJECT_FILE, {"content_mode": content_mode})
             self.sync_agent_profile(project_dir, content_mode=content_mode)
         except Exception:

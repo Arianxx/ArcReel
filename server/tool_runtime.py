@@ -876,7 +876,7 @@ async def get_video_capabilities(
     services: Services,
 ) -> ToolOutcome[dict[str, Any]]:
     try:
-        project = services.projects.load_project(scope.project_name)
+        project = await asyncio.to_thread(services.projects.load_project_readonly, scope.project_name)
         payload = await services.capabilities.video_capabilities_for_project(project)
         await annotate_reference_unit_tiers(payload, project, config_resolver=services.capabilities)
     except FileNotFoundError as exc:

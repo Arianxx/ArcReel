@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import OperationalError
 
+from lib import project_manager as project_manager_module
 from lib import script_review
 from lib.artifact_activation import activate_artifact_target_state
 from lib.config.resolver import ConfigResolver
@@ -661,6 +662,65 @@ def test_reference_step1_migration_carries_confirmation_forward(reference_projec
     assert review["fingerprint"] != before
 
 
+@pytest.mark.asyncio
+async def test_reference_step1_migration_waits_for_step2_draft_lock(reference_project: Path, monkeypatch) -> None:
+    step1_path = reference_project / "drafts" / "episode_1" / "step1_reference_units.json"
+    step1_path.write_text(
+        _json.dumps(
+            {
+                "units": [
+                    {
+                        "unit_id": "E1U01",
+                        "text": "@[主角] 转身",
+                        "duration_seconds": 4,
+                        "duration_override": True,
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    step2_path = quarantine_path(reference_project, 1, QUARANTINE_KIND_STEP2)
+    pm = ProjectManager(reference_project.parent)
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_step2_lock() -> None:
+        with pm.file_lock(step2_path):
+            held.set()
+            assert release.wait(timeout=3)
+
+    holder = asyncio.create_task(asyncio.to_thread(hold_step2_lock))
+    assert await asyncio.to_thread(held.wait, 1)
+    attempted = threading.Event()
+    target_lock = step2_path.parent / f".{step2_path.name}.lock"
+    original_acquire = project_manager_module.portalocker.Lock.acquire
+
+    def tracked_acquire(lock, *args, **kwargs):
+        if Path(lock.filename) == target_lock:
+            attempted.set()
+        return original_acquire(lock, *args, **kwargs)
+
+    monkeypatch.setattr(project_manager_module.portalocker.Lock, "acquire", tracked_acquire)
+    prompt = asyncio.create_task(ScriptGenerator(reference_project).build_prompt(episode=1))
+    try:
+        attempted_before_release = await asyncio.to_thread(attempted.wait, 1)
+        if attempted_before_release:
+            assert not prompt.done()
+            assert "duration_override" in step1_path.read_text(encoding="utf-8")
+            ticked = asyncio.Event()
+            asyncio.get_running_loop().call_soon(ticked.set)
+            await asyncio.wait_for(ticked.wait(), timeout=1)
+    finally:
+        release.set()
+        await asyncio.wait_for(holder, timeout=1)
+
+    await asyncio.wait_for(prompt, timeout=1)
+    assert attempted_before_release
+    assert "duration_override" not in step1_path.read_text(encoding="utf-8")
+
+
 def test_reference_step1_migration_carries_confirmation_confirmed_after_construction(reference_project: Path):
     """确认发生在 ScriptGenerator 构造之后（如 generate() 内 await _fetch_video_capabilities()
     期间用户经 ScriptReviewService.confirm() 并发确认）：self.project_json 是构造时的旧快照，
@@ -917,7 +977,7 @@ async def test_step2_generation_preserves_draft_edited_during_model_call(referen
     release.set()
 
     with pytest.raises(DraftViolation) as excinfo:
-        await generation
+        await asyncio.wait_for(generation, timeout=1)
     assert excinfo.value.code == "draft_revision_conflict"
     envelope = _json.loads(_step2_quarantine(reference_project).read_text(encoding="utf-8"))
     assert envelope["content"]["title"] == "并发草稿"

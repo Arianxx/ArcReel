@@ -44,9 +44,15 @@ class _Projects:
     def __init__(self, project: dict):
         self.project = project
         self.load_script_threads: list[int] = []
+        self.readonly_loads = 0
 
     def load_project(self, name: str) -> dict:
         assert name == "demo"
+        return self.project
+
+    def load_project_readonly(self, name: str) -> dict:
+        assert name == "demo"
+        self.readonly_loads += 1
         return self.project
 
     def load_script(self, name: str, script: str) -> dict:
@@ -133,15 +139,17 @@ async def test_workflow_plan_returns_typed_domain_outcome() -> None:
 
 async def test_video_capabilities_returns_typed_domain_outcome() -> None:
     project = {"generation_mode": "storyboard", "content_mode": "drama"}
+    projects = _Projects(project)
     outcome = await get_video_capabilities(
         ToolRequest(None),
         ProjectScope("demo", Path("/projects")),
         CallerContext(user_id="u1", source="embedded"),
-        Services(projects=_Projects(project), workflow_planner=_Planner(_status()), capabilities=_Capabilities()),
+        Services(projects=projects, workflow_planner=_Planner(_status()), capabilities=_Capabilities()),
     )
 
     assert outcome.problem is None
     assert outcome.value == {"provider_id": "fake", "model": "video-1", "supported_durations": [4, 6]}
+    assert projects.readonly_loads == 1
 
 
 async def test_patch_episode_script_returns_typed_revision_conflict() -> None:

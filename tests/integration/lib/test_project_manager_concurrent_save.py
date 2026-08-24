@@ -67,6 +67,38 @@ def _make_script(episode: int, payload_size: int) -> dict:
 
 
 class TestSaveScriptConcurrency:
+    def test_same_name_project_creation_claims_directory_atomically(self, tmp_path: Path, monkeypatch) -> None:
+        pm = ProjectManager(tmp_path)
+        project_dir = tmp_path / "demo"
+        barrier = threading.Barrier(2)
+        synchronized_threads: set[int] = set()
+        synchronization_lock = threading.Lock()
+        original_mkdir = Path.mkdir
+
+        def synchronized_mkdir(path: Path, *args, **kwargs) -> None:
+            thread_id = threading.get_ident()
+            with synchronization_lock:
+                should_wait = path == project_dir and thread_id not in synchronized_threads
+                if should_wait:
+                    synchronized_threads.add(thread_id)
+            if should_wait:
+                barrier.wait(timeout=2)
+            original_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", synchronized_mkdir)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(pm.create_project, "demo", mode) for mode in ("drama", "narration")]
+            outcomes = []
+            for future in futures:
+                try:
+                    outcomes.append(future.result(timeout=5))
+                except FileExistsError as exc:
+                    outcomes.append(exc)
+
+        assert sum(isinstance(outcome, Path) for outcome in outcomes) == 1
+        assert sum(isinstance(outcome, FileExistsError) for outcome in outcomes) == 1
+        assert (project_dir / "project.json").exists()
+
     async def test_async_file_lock_wait_keeps_event_loop_responsive(self, tmp_path: Path, monkeypatch) -> None:
         pm = ProjectManager(tmp_path)
         path = tmp_path / "draft.json"

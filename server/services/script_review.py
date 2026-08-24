@@ -200,8 +200,9 @@ class ScriptReviewService:
         schema 随后硬拒，用户在 gate 里既看不出问题也改不动。为 None（项目未配置视频型号）时
         退回结构区间 clamp——缺配置不该阻断草稿加载，档位偏移仍由执行时取档兜底。
 
-        调用方须已持有 ``self.pm.file_lock(path)``——本函数只做读改写，不自行加锁，避免与
-        调用方（如 ``confirm``）已持有的同一把锁发生同线程二次获取的死锁。
+        调用方须已持有 ``self.pm.file_lock(path)``；reference_video 还须先持 step2 草稿锁，
+        统一锁序为「下游草稿 → 正式 step1」。本函数只做读改写，不自行加锁，避免与调用方
+        （如 ``confirm``）已持有的同一把锁发生同线程二次获取的死锁。
         """
         content = _read_json(path)
         if content is None or script_review.step1_kind(project) != "reference_video":
@@ -257,7 +258,12 @@ class ScriptReviewService:
         if path is not None:
             # 迁移可能回写 step1 与确认记录；指纹与状态在同一把锁内、迁移之后取，三者才据
             # 同一份落盘内容派生——锁外取则并发 save_content 会让指纹描述另一份内容。
-            with self.pm.file_lock(path):
+            step2_lock = (
+                self.pm.file_lock(quarantine_path(project_path, episode, QUARANTINE_KIND_STEP2))
+                if script_review.step1_kind(project) == "reference_video"
+                else nullcontext()
+            )
+            with step2_lock, self.pm.file_lock(path):
                 content, project = self._read_step1_migrated(
                     project_name, project, episode, path, project_path, supported_durations
                 )
