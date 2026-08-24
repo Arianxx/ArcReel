@@ -600,6 +600,7 @@ async def test_reference_step1_generation_and_step2_promotion_complete_without_l
         QUARANTINE_KIND_STEP2,
         content={"title": "第1集", "units": [{"text": "镜头1：中景，平视。@[张三] 起身。"}]},
         violations=[],
+        meta={"base_fingerprint": None},
     )
     draft = read_quarantine(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2)
     assert draft is not None
@@ -707,6 +708,7 @@ async def test_promote_draft_step2_uses_async_factory(fake_ctx: ToolContext, mon
         QUARANTINE_KIND_STEP2,
         content={"title": "第1集", "units": [{"text": "镜头1：中景，平视。@[张三] 在 @[村口] 等候。"}]},
         violations=[],
+        meta={"base_fingerprint": None},
     )
     seen: dict[str, object] = {}
 
@@ -730,17 +732,48 @@ async def test_promote_draft_step2_uses_async_factory(fake_ctx: ToolContext, mon
 async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
     fake_ctx: ToolContext, monkeypatch
 ) -> None:
-    from server import draft_workflow as mod
+    from lib.text_generator import TextGenerator
 
-    _rv_project(fake_ctx)
+    _rv_source(fake_ctx)
+    split = await _run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[张三] 起身")])
+    assert split.get("is_error") is not True, split
+    project = fake_ctx.pm.project_payload  # pyright: ignore[reportAttributeAccessIssue]
+    project["episodes"][0]["step1_review"] = {
+        "fingerprint": script_review.content_fingerprint(_rv_step1_path(fake_ctx)),
+        "confirmed_at": "2026-08-24T00:00:00Z",
+    }
+    (fake_ctx.project_path / "project.json").write_text(
+        json.dumps(project, ensure_ascii=False),
+        encoding="utf-8",
+    )
     write_quarantine(
         fake_ctx.project_path,
         1,
         QUARANTINE_KIND_STEP2,
-        content={"title": "第1集", "units": [{"text": "@[张三] 起身"}]},
+        content={"title": "第1集", "units": [{"text": "镜头1：中景，平视。@[张三] 起身。"}]},
         violations=[],
+        meta={"base_fingerprint": None},
     )
     path = quarantine_path(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2)
+    draft = read_quarantine(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2)
+    assert draft is not None
+    _use_fake_caps(fake_ctx)
+    workflow = DraftWorkflow(
+        DraftContext(
+            project_name=fake_ctx.project_name,
+            projects_root=fake_ctx.projects_root,
+            pm=fake_ctx.pm,
+            config_resolver=fake_ctx.config_resolver,
+        )
+    )
+
+    class _TextBoundary:
+        model = "async-lock"
+
+    async def create_text_generator(_task_type, _project_name=None):
+        return _TextBoundary()
+
+    monkeypatch.setattr(TextGenerator, "create", create_text_generator)
     pm = ProjectManager(str(fake_ctx.project_path.parent))
     held = threading.Event()
     release = threading.Event()
@@ -753,28 +786,14 @@ async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
     holder = asyncio.create_task(asyncio.to_thread(hold_lock))
     assert await asyncio.to_thread(held.wait, 1)
     attempted = asyncio.Event()
-    original_async_lock = ProjectManager.async_file_lock
-
-    @asynccontextmanager
-    async def observed_async_lock(self, locked_path):
-        attempted.set()
-        async with original_async_lock(self, locked_path):
-            yield
-
-    monkeypatch.setattr(ProjectManager, "async_file_lock", observed_async_lock)
-
-    class _FakeGenerator:
-        @classmethod
-        async def create(cls, project_path, **_kwargs):
-            obj = cls()
-            obj.project_path = project_path
-            return obj
-
-        async def promote_reference_step2_draft(self, episode: int, **_kwargs):
-            return self.project_path / "scripts" / f"episode_{episode}.json"
-
-    monkeypatch.setattr(mod, "ScriptGenerator", _FakeGenerator)
-    promotion = asyncio.create_task(_promote(fake_ctx))
+    promotion = asyncio.create_task(
+        workflow.promote(
+            1,
+            "reference_step2",
+            draft_revision(draft),
+            before_lock=attempted.set,
+        )
+    )
     try:
         await asyncio.wait_for(attempted.wait(), 0.3)
         assert not promotion.done()
@@ -783,7 +802,8 @@ async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
 
     assert await asyncio.wait_for(holder, timeout=1) is None
     out = await asyncio.wait_for(promotion, timeout=1)
-    assert out.get("is_error") is not True, out
+    assert out["promoted"] is True
+    assert (fake_ctx.project_path / "scripts" / "episode_1.json").exists()
 
 
 async def test_open_step1_draft_waits_for_quarantine_lock(fake_ctx: ToolContext, monkeypatch) -> None:

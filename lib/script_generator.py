@@ -311,7 +311,7 @@ class ScriptGenerator:
         # 故此处先按未收窄的全集校验 unit 时长，收窄后的集合在下方按引用情况解析。
         step1_units = None
         if gen_mode == "reference_video":
-            step1_units = await asyncio.to_thread(
+            step1_units = await run_sync_transaction(
                 self._load_reference_step1,
                 episode,
                 self._resolve_raw_supported_durations(caps),
@@ -549,6 +549,11 @@ class ScriptGenerator:
             if reference_step1 is not None
             else None
         )
+        if step2_draft_baseline is not None:
+            raise DraftViolation(
+                "reference step2 草稿待处置；正式生成已中止，请先晋升或丢弃现有草稿",
+                code="draft_revision_conflict",
+            )
         # 调用 TextBackend
         logger.info("正在生成第 %d 集剧本...", episode)
         result = await self._generate_text(
@@ -612,14 +617,25 @@ class ScriptGenerator:
         # 同步——消除「裸 json.dump 旁路」，使 _write_script_unlocked 成为剧本唯一写入点。
         pm = ProjectManager(str(self.project_path.parent))
         try:
-            output_path = pm.save_script(
-                self.project_path.name,
-                script_data,
-                filename,
-                validate=True,
-                artifact_basis=self._artifact_basis,
-                expected_fingerprint=formal_baseline,
-            )
+            if reference_step1 is not None:
+                output_path = await run_sync_transaction(
+                    self._save_reference_step2_if_draft_unchanged,
+                    episode,
+                    step2_draft_baseline,
+                    script_data,
+                    filename,
+                    formal_baseline,
+                )
+            else:
+                output_path = await run_sync_transaction(
+                    pm.save_script,
+                    self.project_path.name,
+                    script_data,
+                    filename,
+                    validate=True,
+                    artifact_basis=self._artifact_basis,
+                    expected_fingerprint=formal_baseline,
+                )
         except ScriptWriteConflict as exc:
             if reference_step1 is None:
                 raise
@@ -720,7 +736,7 @@ class ScriptGenerator:
         if gen_mode == "reference_video":
             # unit 时长按全集校验（见 generate() 同位置说明）；step2 不产出时长，prompt
             # 只需参考图上限。
-            step1_units = await asyncio.to_thread(
+            step1_units = await run_sync_transaction(
                 self._load_reference_step1,
                 episode,
                 self._resolve_raw_supported_durations(caps),
@@ -1418,6 +1434,33 @@ class ScriptGenerator:
             draft = read_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)
             return draft_revision(draft) if draft is not None else None
 
+    def _save_reference_step2_if_draft_unchanged(
+        self,
+        episode: int,
+        expected_draft_revision: str | None,
+        script_data: dict[str, Any],
+        filename: str,
+        formal_baseline: str | None,
+    ) -> Path:
+        draft_path = quarantine_path(self.project_path, episode, QUARANTINE_KIND_STEP2)
+        pm = ProjectManager(str(self.project_path.parent))
+        with pm.file_lock(draft_path):
+            current = read_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)
+            actual_draft_revision = draft_revision(current) if current is not None else None
+            if actual_draft_revision != expected_draft_revision:
+                raise DraftViolation(
+                    "reference step2 草稿在模型生成期间已变化；本次生成结果未覆盖并发编辑，请先处置现有草稿",
+                    code="draft_revision_conflict",
+                )
+            return pm.save_script(
+                self.project_path.name,
+                script_data,
+                filename,
+                validate=True,
+                artifact_basis=self._artifact_basis,
+                expected_fingerprint=formal_baseline,
+            )
+
     def _promote_reference_step2_draft_sync(
         self,
         episode: int,
@@ -1516,18 +1559,22 @@ class ScriptGenerator:
 
         filename = output_filename or episode_script_filename(episode)
         pm = ProjectManager(str(self.project_path.parent))
-        save_kwargs: dict[str, str | None] = (
-            {}
-            if isinstance(expected_fingerprint, _UnsetExpectedFingerprint)
-            else {"expected_fingerprint": expected_fingerprint}
-        )
+        if isinstance(expected_fingerprint, _UnsetExpectedFingerprint):
+            if "base_fingerprint" not in draft.meta:
+                raise DraftViolation(
+                    "reference step2 草稿缺少生成时的正式剧本基线 base_fingerprint；无法安全晋升",
+                    code="formal_revision_missing",
+                )
+            resolved_expected_fingerprint = cast(str | None, draft.meta["base_fingerprint"])
+        else:
+            resolved_expected_fingerprint = expected_fingerprint
         output_path = pm.save_script(
             self.project_path.name,
             script_data,
             filename,
             validate=True,
             artifact_basis=self._artifact_basis,
-            **save_kwargs,
+            expected_fingerprint=resolved_expected_fingerprint,
         )
         # 落盘成功后才清草稿：写盘失败时草稿还在，重试晋升即可，不会两头皆空。
         clear_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)

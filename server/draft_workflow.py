@@ -1140,12 +1140,15 @@ class DraftWorkflow:
         base_revision: str,
         *,
         before_commit: Callable[[], None] | None = None,
+        before_lock: Callable[[], None] | None = None,
         before_snapshot: Callable[[], None] | None = None,
         before_step2_step1_lock: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         resolved = await self._kind(episode, doc_type)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
         result_path: Path | None = None
+        if before_lock is not None:
+            before_lock()
         async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
             draft, actual_revision = await asyncio.to_thread(
                 self._draft_snapshot,

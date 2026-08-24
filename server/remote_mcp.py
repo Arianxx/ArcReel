@@ -89,6 +89,7 @@ _LOCAL_ORIGINS = [
     "http://[::1]",
     "http://[::1]:*",
 ]
+_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
 
 
 class ArcApiKeyVerifier(TokenVerifier):
@@ -177,6 +178,7 @@ def build_remote_mcp_server(
         stateless_http=True,
         streamable_http_path="/",
         json_response=False,
+        max_request_body_size=_MAX_REQUEST_BODY_BYTES,
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=_csv_env("MCP_ALLOWED_HOSTS", _LOCAL_HOSTS),

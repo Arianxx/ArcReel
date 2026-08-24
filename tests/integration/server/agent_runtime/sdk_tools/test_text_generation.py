@@ -860,5 +860,5 @@ async def test_generate_episode_script_reference_legacy_md_hints_resplit(fake_ct
     out = await _call(tool_obj, {"episode": 1})
     assert out.get("is_error") is True
     text = out["content"][0]["text"]
-    assert "重跑 split-reference-video-units" in text
+    assert "调用 generate_step1" in text
     assert "step1_reference_units.json" in text

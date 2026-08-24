@@ -361,10 +361,10 @@ def _resolve_step1_path(project_path: Path, episode: int, project_data: dict[str
         rv_json = drafts_path / REFERENCE_VIDEO_STEP1_FILENAME
         if not rv_json.exists() and (drafts_path / REFERENCE_VIDEO_STEP1_LEGACY_FILENAME).exists():
             return rv_json, (
-                f"重跑 split-reference-video-units 把旧 {REFERENCE_VIDEO_STEP1_LEGACY_FILENAME} "
+                f"调用 generate_step1 把旧 {REFERENCE_VIDEO_STEP1_LEGACY_FILENAME} "
                 f"重新拆分为结构化 {REFERENCE_VIDEO_STEP1_FILENAME}"
             )
-        return rv_json, "split-reference-video-units 子智能体 (Step 1)"
+        return rv_json, "generate_step1 tool"
     if content_mode != "narration" and content_mode in STEP1_FILENAMES:
         # STEP1_FILENAMES 中除 narration 外的模式走两段式结构化 JSON（见 ADR 0041）。
         # narration 虽也在 STEP1_FILENAMES，但另有旧 .md 迁移提示分支，需先排除。
@@ -375,8 +375,8 @@ def _resolve_step1_path(project_path: Path, episode: int, project_data: dict[str
     narration_legacy_md = STEP1_LEGACY_FILENAMES["narration"][0]
     step1_json = drafts_path / narration_json
     if not step1_json.exists() and (drafts_path / narration_legacy_md).exists():
-        return step1_json, f"重跑 split-narration-segments 把旧 {narration_legacy_md} 重新拆分为结构化 {narration_json}"
-    return step1_json, "split-narration-segments 子智能体 (Step 1)"
+        return step1_json, f"调用 generate_step1 把旧 {narration_legacy_md} 重新拆分为结构化 {narration_json}"
+    return step1_json, "generate_step1 tool"
 
 
 def _episode_generation_preflight(project_path: Path, episode: int, *, enforce_review_gate: bool) -> None:

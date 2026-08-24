@@ -102,6 +102,10 @@ def _mounted(server) -> FastAPI:
     return app
 
 
+def test_remote_mcp_accepts_source_upload_sized_requests(remote_server) -> None:
+    assert remote_server.settings.max_request_body_size > 50 * 1024 * 1024
+
+
 def test_remote_mcp_rejects_mismatched_projects_roots(tmp_path: Path) -> None:
     projects = ProjectManager(tmp_path / "scope-projects")
     services = Services(
