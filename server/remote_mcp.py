@@ -24,6 +24,7 @@ from lib.project_manager import ProjectManager, get_project_manager
 from lib.source_revision import SourceScope
 from lib.workflow_plan import NarrationDelivery, WorkflowPlanRequest
 from server.auth import API_KEY_PREFIX, _verify_api_key
+from server.draft_workflow import DraftLocator, PatchDraftRequest
 from server.services import workflow_planner
 from server.tool_runtime import (
     CallerContext,
@@ -44,6 +45,7 @@ from server.tool_runtime import (
     complete_asset_inventory,
     complete_step1_rebuild,
     create_project,
+    discard_draft,
     get_episode_script,
     get_project_content,
     get_source_text,
@@ -53,15 +55,21 @@ from server.tool_runtime import (
     list_project_files,
     list_projects,
     list_source_files,
+    migration_gate,
+    open_draft,
+    patch_draft,
     patch_episode_meta,
     patch_project,
     plan_episodes,
+    promote_draft,
     read_project_file,
     rename_asset,
     reset_episode_planning,
     retry_project_migration,
     upload_source,
 )
+
+DraftDocType = Literal["drama_step1", "narration_step1", "reference_step1", "reference_step2"]
 
 _LOCAL_HOSTS = ["127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*", "[::1]", "[::1]:*"]
 _LOCAL_ORIGINS = [
@@ -211,6 +219,78 @@ def build_remote_mcp_server(
         except (FileNotFoundError, ValueError) as exc:
             return _to_mcp_result("source", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
         return _to_mcp_result("source", await upload_source(ToolRequest(request), scope, caller, services))
+
+    @server.tool(name="open_draft", structured_output=False)
+    async def remote_open_draft(
+        project: str,
+        episode: int,
+        doc_type: DraftDocType,
+        source: str | None = None,
+    ) -> CallToolResult:
+        """Open a revisioned editing draft for one explicit project."""
+        try:
+            scope = _project_scope(project, projects)
+            request = DraftLocator(episode=episode, doc_type=doc_type, source=source)
+        except (FileNotFoundError, ValueError) as exc:
+            return _to_mcp_result("draft", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
+        if problem := await migration_gate(scope, services):
+            return _to_mcp_result("draft", ToolOutcome(problem=problem))
+        return _to_mcp_result("draft", await open_draft(ToolRequest(request), scope, caller, services))
+
+    @server.tool(name="patch_draft", structured_output=False)
+    async def remote_patch_draft(
+        project: str,
+        episode: int,
+        doc_type: DraftDocType,
+        content: dict[str, Any],
+        base_revision: str,
+        accept_formal_revision: str | None = None,
+        accepts_formal_revision: bool = False,
+        source: str | None = None,
+        updates_source: bool = False,
+    ) -> CallToolResult:
+        """Atomically replace a draft body; presence flags permit explicit null updates."""
+        try:
+            scope = _project_scope(project, projects)
+            request = PatchDraftRequest(
+                episode=episode,
+                doc_type=doc_type,
+                content=content,
+                base_revision=base_revision,
+                accept_formal_revision=accept_formal_revision,
+                accepts_formal_revision=accepts_formal_revision or accept_formal_revision is not None,
+                source=source,
+                updates_source=updates_source or source is not None,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return _to_mcp_result("draft", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
+        if problem := await migration_gate(scope, services):
+            return _to_mcp_result("draft", ToolOutcome(problem=problem))
+        return _to_mcp_result("draft", await patch_draft(ToolRequest(request), scope, caller, services))
+
+    @server.tool(name="promote_draft", structured_output=False)
+    async def remote_promote_draft(project: str, episode: int, doc_type: DraftDocType) -> CallToolResult:
+        """Validate and promote one editing draft into its formal document."""
+        try:
+            scope = _project_scope(project, projects)
+            request = DraftLocator(episode=episode, doc_type=doc_type)
+        except (FileNotFoundError, ValueError) as exc:
+            return _to_mcp_result("draft", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
+        if problem := await migration_gate(scope, services):
+            return _to_mcp_result("draft", ToolOutcome(problem=problem))
+        return _to_mcp_result("draft", await promote_draft(ToolRequest(request), scope, caller, services))
+
+    @server.tool(name="discard_draft", structured_output=False)
+    async def remote_discard_draft(project: str, episode: int, doc_type: DraftDocType) -> CallToolResult:
+        """Discard one editing draft without changing its formal document."""
+        try:
+            scope = _project_scope(project, projects)
+            request = DraftLocator(episode=episode, doc_type=doc_type)
+        except (FileNotFoundError, ValueError) as exc:
+            return _to_mcp_result("draft", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
+        if problem := await migration_gate(scope, services):
+            return _to_mcp_result("draft", ToolOutcome(problem=problem))
+        return _to_mcp_result("draft", await discard_draft(ToolRequest(request), scope, caller, services))
 
     @server.tool(name="get_workflow_plan", structured_output=False)
     async def remote_workflow_plan(

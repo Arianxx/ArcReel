@@ -176,6 +176,8 @@ ArcReel 在应用启动时运行 Alembic 迁移，将数据库结构升级到当
 
 远程 MCP 提供 `get_project_content`、`list_source_files`、`get_source_text`、`get_episode_script`、`get_step1_content`、`list_project_files` 和 `read_project_file` 七个内容读取工具；成功结果同时携带正文与 revision，供后续带版本的修改使用。通用项目文件读取只开放项目业务文件白名单，拒绝隐藏路径、symlink、越界、非普通文件和超过 50 MiB 的文件；常规工作流应优先使用对应的专用读取工具。
 
+远程 MCP 同时提供 `list_projects`、`create_project`、`upload_source` 三个项目入口工具，以及 `open_draft`、`patch_draft`、`promote_draft`、`discard_draft` 四个草稿工具。草稿工具要求显式传入 `project`，并使用 revision 防止并发覆盖。
+
 ArcReel 的沙箱要求父进程环境中不保留供应商密钥。以下凭据环境变量存在非空值时，服务会拒绝启动并提示迁移到 WebUI 设置页：
 
 - `ANTHROPIC_API_KEY`

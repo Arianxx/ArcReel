@@ -8,7 +8,10 @@ from fastapi import FastAPI
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from lib.draft_quarantine import QUARANTINE_KIND_DRAMA_STEP1, read_quarantine
 from lib.project_manager import ProjectManager
+from lib.project_migration_failure import MIGRATION_FAILURE_CODE, record_migration_failure
+from lib.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
 from lib.workflow_plan import WorkflowPlanRequest, build_workflow_plan
 from lib.workflow_state import WorkflowStatus
 from server.auth import create_download_token, create_token
@@ -54,7 +57,7 @@ class _Capabilities:
 
 
 @pytest.fixture
-def remote_server(tmp_path: Path):
+def remote_projects(tmp_path: Path) -> ProjectManager:
     projects_root = tmp_path / "projects"
     manager = ProjectManager(projects_root)
     manager.create_project("demo", content_mode="drama")
@@ -66,19 +69,30 @@ def remote_server(tmp_path: Path):
     (project_dir / "scripts" / "episode_1.json").write_text('{"episode":1,"scenes":[]}', encoding="utf-8")
     drafts = project_dir / "drafts" / "episode_1"
     drafts.mkdir(parents=True)
-    (drafts / "step1_normalized_script.json").write_text('{"title":"第一集","scenes":[]}', encoding="utf-8")
+    (drafts / "step1_normalized_script.json").write_text(
+        '{"title":"第一集","scenes":[{"scene_id":"E1S01","duration_seconds":4,'
+        '"segment_break":false,"characters_in_scene":[],"scenes":[],"props":[],'
+        '"scene_description":"山门前。","utterances":[],"source_text":"第一集原文"}]}',
+        encoding="utf-8",
+    )
     (projects_root / "empty").mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "project.json").write_text("{}", encoding="utf-8")
     (projects_root / "escape").symlink_to(outside, target_is_directory=True)
 
+    return manager
+
+
+@pytest.fixture
+def remote_server(remote_projects: ProjectManager):
+
     async def verify_api_key(token: str):
         return {"sub": "apikey:test", "via": "apikey"} if token == "arc-valid" else None
 
-    services = Services(projects=manager, workflow_planner=_Planner(), capabilities=_Capabilities())
+    services = Services(projects=remote_projects, workflow_planner=_Planner(), capabilities=_Capabilities())
     return build_remote_mcp_server(
-        projects=manager, services=services, token_verifier=ArcApiKeyVerifier(verify_api_key)
+        projects=remote_projects, services=services, token_verifier=ArcApiKeyVerifier(verify_api_key)
     )
 
 
@@ -198,9 +212,22 @@ async def test_remote_mcp_returns_typed_workflow_plan_and_rejects_bad_project(re
         "list_project_files",
         "read_project_file",
     }
+    drafts = {"open_draft", "patch_draft", "promote_draft", "discard_draft"}
+    retired = {
+        "normalize_drama_script",
+        "split_narration_segments",
+        "split_reference_video_units",
+        "insert_segment",
+        "remove_segment",
+        "split_segment",
+        "open_step1_for_edit",
+        "validate_and_promote_draft",
+        "get_episode_script_revision",
+    }
     listed = {tool.name: tool for tool in tools.tools}
-    assert migrated | readers <= listed.keys()
-    assert all("project" in listed[name].inputSchema["required"] for name in migrated | readers)
+    assert migrated | readers | drafts <= listed.keys()
+    assert retired.isdisjoint(listed)
+    assert all("project" in listed[name].inputSchema["required"] for name in migrated | readers | drafts)
     assert result.structuredContent is not None
     assert result.structuredContent["workflow_plan"]["status"]["target"]["episode"] == 1
     assert capabilities.structuredContent == {
@@ -260,6 +287,121 @@ async def test_remote_mcp_entry_tools_share_one_projects_root(remote_server) -> 
     assert {project["name"] for project in projects.structuredContent["projects"]} == {"demo", "new-project"}
     assert uploaded.structuredContent is not None
     assert uploaded.structuredContent["source"]["path"] == "source/novel.txt"
+
+
+async def test_remote_mcp_draft_supports_multiple_patches_and_discard(remote_server) -> None:
+    app = _mounted(remote_server)
+    async with remote_server.session_manager.run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            headers={"Authorization": "Bearer arc-valid"},
+            follow_redirects=True,
+        ) as client:
+            async with streamable_http_client("http://localhost/mcp", http_client=client) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    args = {"project": "demo", "episode": 1, "doc_type": "drama_step1"}
+                    opened = await session.call_tool("open_draft", args)
+                    first_content = opened.structuredContent["draft"]["content"]
+                    first_content["title"] = "第一次修改"
+                    first = await session.call_tool(
+                        "patch_draft",
+                        {
+                            **args,
+                            "content": first_content,
+                            "base_revision": opened.structuredContent["draft"]["revision"],
+                        },
+                    )
+                    second_content = first.structuredContent["draft"]["content"]
+                    second_content["title"] = "第二次修改"
+                    second = await session.call_tool(
+                        "patch_draft",
+                        {
+                            **args,
+                            "content": second_content,
+                            "base_revision": first.structuredContent["draft"]["revision"],
+                        },
+                    )
+                    discarded = await session.call_tool("discard_draft", args)
+                    reopened = await session.call_tool("open_draft", args)
+                    promoted = await session.call_tool("promote_draft", args)
+
+    assert not opened.isError
+    assert not first.isError
+    assert not second.isError
+    assert second.structuredContent["draft"]["content"]["title"] == "第二次修改"
+    assert discarded.structuredContent["draft"]["discarded"] is True
+    assert not reopened.isError
+    assert not promoted.isError
+    assert promoted.structuredContent["draft"]["promoted"] is True
+
+
+async def test_remote_mcp_draft_preserves_explicit_null_updates(remote_server, remote_projects) -> None:
+    app = _mounted(remote_server)
+    async with remote_server.session_manager.run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            headers={"Authorization": "Bearer arc-valid"},
+            follow_redirects=True,
+        ) as client:
+            async with streamable_http_client("http://localhost/mcp", http_client=client) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    args = {
+                        "project": "demo",
+                        "episode": 1,
+                        "doc_type": "drama_step1",
+                        "source": "source/episode_1.txt",
+                    }
+                    opened = await session.call_tool("open_draft", args)
+                    (
+                        remote_projects.get_project_path("demo") / "drafts/episode_1/step1_normalized_script.json"
+                    ).unlink()
+                    patched = await session.call_tool(
+                        "patch_draft",
+                        {
+                            **args,
+                            "content": opened.structuredContent["draft"]["content"],
+                            "base_revision": opened.structuredContent["draft"]["revision"],
+                            "accept_formal_revision": None,
+                            "accepts_formal_revision": True,
+                            "source": None,
+                            "updates_source": True,
+                        },
+                    )
+
+    draft = read_quarantine(remote_projects.get_project_path("demo"), 1, QUARANTINE_KIND_DRAMA_STEP1)
+    assert not patched.isError
+    assert draft is not None
+    assert draft.meta["base_fingerprint"] is None
+    assert draft.meta["source"] is None
+
+
+async def test_remote_mcp_draft_respects_migration_failure_gate(remote_server, remote_projects) -> None:
+    record_migration_failure(
+        remote_projects.get_project_path("demo"),
+        RuntimeError("blocked"),
+        schema_version=CURRENT_PROJECT_SCHEMA_VERSION,
+    )
+    app = _mounted(remote_server)
+    async with remote_server.session_manager.run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            headers={"Authorization": "Bearer arc-valid"},
+            follow_redirects=True,
+        ) as client:
+            async with streamable_http_client("http://localhost/mcp", http_client=client) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(
+                        "discard_draft", {"project": "demo", "episode": 1, "doc_type": "drama_step1"}
+                    )
+
+    assert result.isError
+    assert result.structuredContent["problem"]["code"] == MIGRATION_FAILURE_CODE
 
 
 async def test_remote_mcp_host_initializes_first_request_and_can_restart() -> None:

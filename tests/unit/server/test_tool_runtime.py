@@ -20,12 +20,7 @@ from server.tool_runtime import (
     PatchEpisodeScriptRequest,
     ProjectScope,
     Services,
-    TextGenerationRequest,
-    TextGenerationResult,
     ToolRequest,
-    confirm_script_review,
-    generate_episode_script,
-    generate_step1,
     get_episode_script,
     get_project_content,
     get_source_text,
@@ -163,39 +158,6 @@ async def test_patch_episode_script_returns_typed_revision_conflict() -> None:
     assert outcome.problem is None
     assert outcome.value is not None
     assert outcome.value.problems[0].code == "revision_conflict"
-
-
-async def test_text_generation_tools_return_typed_domain_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def script_handler(request: TextGenerationRequest, **_kwargs) -> TextGenerationResult:
-        return TextGenerationResult(f"script:{request.episode}")
-
-    async def step1_handler(request: TextGenerationRequest, **_kwargs) -> TextGenerationResult:
-        return TextGenerationResult(f"step1:{request.episode}")
-
-    async def confirm_handler(episode: int, **_kwargs) -> TextGenerationResult:
-        return TextGenerationResult(f"confirmed:{episode}")
-
-    monkeypatch.setattr(tool_runtime, "generate_episode_script_handler", script_handler)
-    monkeypatch.setattr(tool_runtime, "generate_narration_step1", step1_handler)
-    monkeypatch.setattr(tool_runtime, "confirm_script_review_handler", confirm_handler)
-
-    project = {"generation_mode": "storyboard"}
-    scope = ProjectScope("demo", Path("/projects"))
-    caller = CallerContext(user_id="u1", source="embedded")
-    services = Services(
-        projects=_Projects(project),
-        workflow_planner=_Planner(_status()),
-        capabilities=_Capabilities(),
-    )
-    request = ToolRequest(TextGenerationRequest(episode=2))
-
-    script = await generate_episode_script(request, scope, caller, services)
-    step1 = await generate_step1(request, scope, caller, services)
-    confirmed = await confirm_script_review(ToolRequest(2), scope, caller, services)
-
-    assert script.value == TextGenerationResult("script:2")
-    assert step1.value == TextGenerationResult("step1:2")
-    assert confirmed.value == TextGenerationResult("confirmed:2")
 
 
 def test_text_generation_dependency_points_from_host_adapters_to_shared_handler() -> None:
@@ -349,13 +311,14 @@ async def test_project_file_read_holds_the_checked_file_snapshot(tmp_path: Path,
     assert outcome.value is not None and outcome.value.content == "safe"
 
 
-async def test_project_file_read_rejects_oversized_regular_file(tmp_path: Path, monkeypatch) -> None:
+async def test_project_file_read_rejects_oversized_regular_file(tmp_path: Path) -> None:
     project_dir = tmp_path / "demo"
     source_dir = project_dir / "source"
     source_dir.mkdir(parents=True)
     (project_dir / "project.json").write_text("{}", encoding="utf-8")
-    (source_dir / "novel.txt").write_bytes(b"12345")
-    monkeypatch.setattr(tool_runtime, "BUSINESS_FILE_MAX_BYTES", 4)
+    with (source_dir / "novel.txt").open("wb") as handle:
+        handle.seek(tool_runtime.BUSINESS_FILE_MAX_BYTES)
+        handle.write(b"x")
     services = Services(
         projects=ProjectManager(tmp_path), workflow_planner=_Planner(_status()), capabilities=_Capabilities()
     )

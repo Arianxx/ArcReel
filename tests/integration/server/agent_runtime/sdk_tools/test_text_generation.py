@@ -10,17 +10,15 @@ import pytest
 
 from lib import script_review
 from lib.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
-from server import tool_runtime
 from server.agent_runtime.sdk_tools._context import ToolContext
 from server.agent_runtime.sdk_tools.text_generation import (
     _generate_drama_step1_tool as normalize_drama_script_tool,
 )
 from server.agent_runtime.sdk_tools.text_generation import (
     generate_episode_script_tool,
-    generate_step1_tool,
     get_video_capabilities_tool,
 )
-from server.text_generation import TextGenerationResult, _parse_normalized_content
+from server.text_generation import _parse_normalized_content
 from tests.integration.server.agent_runtime.sdk_tools.sdk_tools_support import (
     _call,
     _fake_caps_resolver,
@@ -35,47 +33,6 @@ _NO_I2V = {"i2v": ValueError("i2v bucket unresolvable in this test")}
 # ---------------------------------------------------------------------------
 # text_generation
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("content_mode", "generation_mode", "expected"),
-    [
-        ("drama", "storyboard", "drama"),
-        ("narration", "storyboard", "narration"),
-        ("drama", "reference_video", "reference"),
-    ],
-)
-async def test_generate_step1_dispatches_by_project_axes(
-    fake_ctx: ToolContext,
-    monkeypatch: pytest.MonkeyPatch,
-    content_mode: str,
-    generation_mode: str,
-    expected: str,
-) -> None:
-    fake_ctx.pm.project_payload.update(  # type: ignore[attr-defined]
-        content_mode=content_mode,
-        generation_mode=generation_mode,
-    )
-
-    async def handler(*_args, **_kwargs):
-        return TextGenerationResult(expected)
-
-    monkeypatch.setattr(
-        tool_runtime,
-        {
-            "drama": "generate_drama_step1",
-            "narration": "generate_narration_step1",
-            "reference": "generate_reference_step1",
-        }[expected],
-        handler,
-    )
-
-    result = await _call(
-        generate_step1_tool(fake_ctx),
-        {"episode": 1},
-    )
-
-    assert json.loads(result["content"][0]["text"])["text_generation"]["message"] == expected
 
 
 async def test_get_video_capabilities_happy(fake_ctx: ToolContext) -> None:

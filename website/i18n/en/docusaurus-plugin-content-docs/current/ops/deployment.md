@@ -173,6 +173,10 @@ Notes:
 
 The remote MCP endpoint is `/mcp` and always requires an API Key with an `arc-` prefix; it never permits anonymous access, even when `AUTH_ENABLED=false`. For remote access, configure all three `MCP_*` variables above and connect through an HTTPS reverse proxy, VPN, or secure tunnel that preserves long-lived SSE connections.
 
+Remote MCP provides seven content-reading tools: `get_project_content`, `list_source_files`, `get_source_text`, `get_episode_script`, `get_step1_content`, `list_project_files`, and `read_project_file`. Successful results include both the content and a revision for subsequent versioned edits. General project-file reads allow only project business files and reject hidden paths, symlinks, traversal, non-regular files, and files larger than 50 MiB. Prefer the dedicated reader for normal workflow operations.
+
+Remote MCP also provides three project entry tools, `list_projects`, `create_project`, and `upload_source`, plus four draft tools: `open_draft`, `patch_draft`, `promote_draft`, and `discard_draft`. Draft tools require an explicit `project` and use revisions to prevent concurrent overwrites.
+
 ArcReel's sandbox requires provider secrets to be absent from the parent process environment. If any of the following credential environment variables has a non-empty value, the service refuses to start and prompts you to move the credential to the Web UI Settings page:
 
 - `ANTHROPIC_API_KEY`

@@ -1284,7 +1284,7 @@ def _migration_tool_problem(failure: MigrationFailureRecord) -> ToolProblem:
     )
 
 
-async def _migration_gate(scope: ProjectScope, services: Services) -> ToolProblem | None:
+async def migration_gate(scope: ProjectScope, services: Services) -> ToolProblem | None:
     failure = await asyncio.to_thread(project_migration_failure, scope.project_name, services.projects)
     return _migration_tool_problem(failure) if failure is not None else None
 
@@ -1348,7 +1348,7 @@ async def plan_episodes(
     *,
     planner_cls: type[EpisodePlanner] = EpisodePlanner,
 ) -> ToolOutcome[PlanEpisodesResult]:
-    if problem := await _migration_gate(scope, services):
+    if problem := await migration_gate(scope, services):
         return ToolOutcome(problem=problem)
     try:
         planner = await planner_cls.create(services.projects.get_project_path(scope.project_name))
@@ -1386,7 +1386,7 @@ async def reset_episode_planning(
     *,
     resetter: Callable[..., Any] = reset_episode_planning_service,
 ) -> ToolOutcome[ResetEpisodePlanningResult]:
-    if problem := await _migration_gate(scope, services):
+    if problem := await migration_gate(scope, services):
         return ToolOutcome(problem=problem)
     value = request.value
     try:
@@ -1708,7 +1708,7 @@ async def complete_asset_inventory(
     run_sync: Callable[..., Awaitable[Any]] = asyncio.to_thread,
     complete: Callable[..., Any] = complete_asset_inventory_service,
 ) -> ToolOutcome[CompleteAssetInventoryResult]:
-    if problem := await _migration_gate(scope, services):
+    if problem := await migration_gate(scope, services):
         return ToolOutcome(problem=problem)
     value = request.value
     try:
@@ -1763,7 +1763,7 @@ async def complete_step1_rebuild(
     run_sync: Callable[..., Awaitable[Any]] = asyncio.to_thread,
     complete: Callable[..., Any] = complete_stale_step1_rebuild,
 ) -> ToolOutcome[CompleteStep1RebuildResult]:
-    if problem := await _migration_gate(scope, services):
+    if problem := await migration_gate(scope, services):
         return ToolOutcome(problem=problem)
     value = request.value
     try:
