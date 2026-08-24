@@ -175,7 +175,7 @@ The remote MCP endpoint is `/mcp` and always requires an API Key with an `arc-` 
 
 Remote MCP provides seven content-reading tools: `get_project_content`, `list_source_files`, `get_source_text`, `get_episode_script`, `get_step1_content`, `list_project_files`, and `read_project_file`. Successful results include both the content and a revision for subsequent versioned edits. General project-file reads allow only project business files and reject hidden paths, symlinks, traversal, non-regular files, and files larger than 50 MiB. Prefer the dedicated reader for normal workflow operations.
 
-Remote MCP also provides three project entry tools, `list_projects`, `create_project`, and `upload_source`, plus four draft tools: `open_draft`, `patch_draft`, `promote_draft`, and `discard_draft`. Draft tools require an explicit `project`; `patch_draft` and `discard_draft` also require the revision returned by the latest read to prevent concurrent overwrites or stale deletion.
+Remote MCP also provides three project entry tools, `list_projects`, `create_project`, and `upload_source`, plus four draft tools: `open_draft`, `patch_draft`, `promote_draft`, and `discard_draft`. Draft tools require an explicit `project`; `patch_draft` and `discard_draft` also require the current revision returned by `open_draft` or the most recent `patch_draft` to prevent concurrent overwrites or stale deletion.
 
 Text and script tools are also available remotely: `generate_step1`, `generate_episode_script`, `confirm_script_review`, and `patch_episode_script`. Script edits must include the revision returned by a reader and submit operations atomically.
 
