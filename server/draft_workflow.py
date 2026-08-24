@@ -955,7 +955,14 @@ class DraftWorkflow:
             )
         return kind
 
-    def _read_if_present(self, episode: int, kind: str) -> dict[str, Any] | None:
+    def _read_if_present(
+        self,
+        episode: int,
+        kind: str,
+        before_snapshot: Callable[[], None] | None = None,
+    ) -> dict[str, Any] | None:
+        if before_snapshot is not None:
+            before_snapshot()
         draft = read_quarantine(self.ctx.project_path, episode, kind)
         if draft is not None:
             payload = draft_payload(draft)
@@ -966,8 +973,13 @@ class DraftWorkflow:
             raise DraftWorkflowError("draft_not_found", detail)
         return None
 
-    def _read(self, episode: int, kind: str) -> dict[str, Any]:
-        payload = self._read_if_present(episode, kind)
+    def _read(
+        self,
+        episode: int,
+        kind: str,
+        before_snapshot: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._read_if_present(episode, kind, before_snapshot)
         if payload is not None:
             return payload
         detail = f"episode {episode} has no {doc_type_for_kind(kind)} draft"
@@ -982,13 +994,20 @@ class DraftWorkflow:
             raise ValueError("project has no formal step1 document")
         return path
 
-    async def open(self, episode: int, doc_type: str, source: str | None = None) -> dict[str, Any]:
+    async def open(
+        self,
+        episode: int,
+        doc_type: str,
+        source: str | None = None,
+        *,
+        before_snapshot: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
         resolved = await self._kind(episode, doc_type)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
 
         try:
             async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
-                existing = await asyncio.to_thread(self._read_if_present, episode, resolved)
+                existing = await asyncio.to_thread(self._read_if_present, episode, resolved, before_snapshot)
                 if existing is not None:
                     return existing
                 if resolved == QUARANTINE_KIND_STEP2:
@@ -1014,7 +1033,7 @@ class DraftWorkflow:
                     )
                 else:
                     await _STEP1_EDIT_OPENERS[resolved](self.ctx, episode, source)
-                return await asyncio.to_thread(self._read, episode, resolved)
+                return await asyncio.to_thread(self._read, episode, resolved, before_snapshot)
         except DraftWorkflowError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -1031,6 +1050,7 @@ class DraftWorkflow:
         source: str | None,
         updates_source: bool,
         before_commit: Callable[[], None] | None,
+        before_snapshot: Callable[[], None] | None,
     ) -> dict[str, Any]:
         path = quarantine_path(self.ctx.project_path, episode, resolved)
         draft = read_quarantine(self.ctx.project_path, episode, resolved)
@@ -1069,7 +1089,7 @@ class DraftWorkflow:
                 "content": content,
             },
         )
-        return self._read(episode, resolved)
+        return self._read(episode, resolved, before_snapshot)
 
     async def patch(
         self,
@@ -1083,6 +1103,7 @@ class DraftWorkflow:
         updates_source: bool = False,
         *,
         before_commit: Callable[[], None] | None = None,
+        before_snapshot: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         resolved = await self._kind(episode, doc_type)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
@@ -1098,6 +1119,7 @@ class DraftWorkflow:
                 source,
                 updates_source,
                 before_commit,
+                before_snapshot,
             )
 
     async def promote(

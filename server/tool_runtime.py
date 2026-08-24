@@ -784,7 +784,7 @@ async def create_project(
     def _create() -> dict[str, Any]:
         value = request.value
         name = services.projects.normalize_project_name(value.name)
-        services.projects.create_project(name, content_mode=value.content_mode)
+        services.projects.create_project(name, content_mode=value.content_mode, publish=False)
         try:
             project = services.projects.create_project_metadata(
                 name,

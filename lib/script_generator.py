@@ -1407,22 +1407,14 @@ class ScriptGenerator:
             draft = read_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)
             return draft_revision(draft) if draft is not None else None
 
-    async def promote_reference_step2_draft(
+    def _promote_reference_step2_draft_sync(
         self,
         episode: int,
+        caps: dict | None,
         output_filename: str | None = None,
         *,
         expected_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
     ) -> Path:
-        """按产出时那套校验器全量重判 step2 待修复草稿，通过则晋升为正式剧本并清除草稿。
-
-        重判用的是 ``_merge_reference_visual`` 本身，不是它的简化副本：晋升口径与产出口径必须
-        同一份代码，否则「晋升时放行、下次生成时被拒」这类分叉会重新出现。step1 一并重读——
-        草稿在场期间用户可能在内容确认界面改过 step1，保结构 diff 要对着现值判。
-
-        仍有违约时刷新草稿里的报告快照后抛出（``DraftViolation``），草稿留在原地供继续修改；
-        无收敛轮次上限。
-        """
         draft = read_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)
         if draft is None:
             raise FileNotFoundError(
@@ -1430,9 +1422,7 @@ class ScriptGenerator:
                 f"（{quarantine_path(self.project_path, episode, QUARANTINE_KIND_STEP2)} 缺失或内容不是合法信封）"
             )
 
-        caps = await self._fetch_video_capabilities()
-        step1_units = await asyncio.to_thread(
-            self._load_reference_step1,
+        step1_units = self._load_reference_step1(
             episode,
             self._resolve_raw_supported_durations(caps),
         )
@@ -1506,6 +1496,31 @@ class ScriptGenerator:
         clear_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)
         self._quality_probe(script_data, episode)
         return output_path
+
+    async def promote_reference_step2_draft(
+        self,
+        episode: int,
+        output_filename: str | None = None,
+        *,
+        expected_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
+    ) -> Path:
+        """按产出时那套校验器全量重判 step2 待修复草稿，通过则晋升为正式剧本并清除草稿。
+
+        重判用的是 ``_merge_reference_visual`` 本身，不是它的简化副本：晋升口径与产出口径必须
+        同一份代码，否则「晋升时放行、下次生成时被拒」这类分叉会重新出现。step1 一并重读——
+        草稿在场期间用户可能在内容确认界面改过 step1，保结构 diff 要对着现值判。
+
+        仍有违约时刷新草稿里的报告快照后抛出（``DraftViolation``），草稿留在原地供继续修改；
+        无收敛轮次上限。
+        """
+        caps = await self._fetch_video_capabilities()
+        return await run_sync_transaction(
+            self._promote_reference_step2_draft_sync,
+            episode,
+            caps,
+            output_filename,
+            expected_fingerprint=expected_fingerprint,
+        )
 
     def _parse_response(self, response_text: str, episode: int) -> dict:
         """

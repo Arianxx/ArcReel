@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from pathlib import Path
 
@@ -120,6 +121,43 @@ async def test_create_project_rolls_back_when_metadata_initialization_fails(tmp_
     assert failed.problem is not None and failed.problem.code == "internal_error"
     assert not (projects_root / "demo").exists()
     ProjectManager(projects_root).create_project("demo")
+
+
+async def test_create_project_stays_unpublished_until_metadata_is_complete(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingMetadataProjectManager(ProjectManager):
+        def create_project_metadata(self, *args, **kwargs):
+            started.set()
+            assert release.wait(timeout=2)
+            return super().create_project_metadata(*args, **kwargs)
+
+    projects = BlockingMetadataProjectManager(tmp_path / "projects")
+    services = Services(
+        projects=projects,
+        workflow_planner=_Unused(),  # type: ignore[arg-type]
+        capabilities=_Unused(),  # type: ignore[arg-type]
+    )
+    caller = CallerContext(user_id="test", source="mcp")
+    creation = asyncio.create_task(
+        create_project(
+            ToolRequest(CreateProjectToolRequest(name="demo", title="Demo")),
+            caller,
+            services,
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+    try:
+        assert not projects.project_exists("demo")
+        listed = await list_projects(ToolRequest(None), caller, services)
+        assert listed.value == []
+    finally:
+        release.set()
+        created = await asyncio.wait_for(creation, timeout=1)
+
+    assert created.problem is None
+    assert projects.project_exists("demo")
 
 
 async def test_list_projects_uses_readonly_loader(tmp_path: Path, monkeypatch) -> None:

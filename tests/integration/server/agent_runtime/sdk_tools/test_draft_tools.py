@@ -138,31 +138,34 @@ async def test_open_draft_returns_existing_draft_without_clobbering(fake_ctx: To
     assert "reference_step1" in out["content"][0]["text"]
 
 
-async def test_open_and_patch_build_response_snapshot_off_event_loop(fake_ctx: ToolContext, monkeypatch) -> None:
+async def test_open_and_patch_build_response_snapshot_off_event_loop(fake_ctx: ToolContext) -> None:
     _rv_source(fake_ctx)
     _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
     await _open_for_edit(fake_ctx, source="source/episode_1.txt")
     caller_thread = threading.get_ident()
     worker_threads: list[int] = []
-    original_fingerprint = script_review.content_fingerprint
-
-    def tracked_fingerprint(path):
-        worker_threads.append(threading.get_ident())
-        return original_fingerprint(path)
-
-    monkeypatch.setattr(script_review, "content_fingerprint", tracked_fingerprint)
-    opened = _draft_result(await _open_for_edit(fake_ctx, source="source/episode_1.txt"))
-    patched = await _call(
-        patch_draft_tool(fake_ctx),
-        {
-            "episode": 1,
-            "doc_type": "reference_step1",
-            "content": opened["content"],
-            "base_revision": opened["revision"],
-        },
+    workflow = DraftWorkflow(
+        DraftContext(
+            project_name=fake_ctx.project_name,
+            projects_root=fake_ctx.projects_root,
+            pm=fake_ctx.pm,
+            config_resolver=fake_ctx.config_resolver,
+        )
     )
 
-    assert patched.get("is_error") is not True, patched
+    def observe() -> None:
+        worker_threads.append(threading.get_ident())
+
+    opened = await workflow.open(1, "reference_step1", before_snapshot=observe)
+    patched = await workflow.patch(
+        1,
+        "reference_step1",
+        opened["content"],
+        opened["revision"],
+        before_snapshot=observe,
+    )
+
+    assert patched["revision"] == opened["revision"]
     assert len(worker_threads) == 2
     assert all(thread != caller_thread for thread in worker_threads)
 

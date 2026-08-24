@@ -387,13 +387,20 @@ class ProjectManager:
             (root / sub).mkdir(exist_ok=True)
         return root
 
-    def create_project(self, name: str, content_mode: ContentMode = "narration") -> Path:
+    def create_project(
+        self,
+        name: str,
+        content_mode: ContentMode = "narration",
+        *,
+        publish: bool = True,
+    ) -> Path:
         """
         创建新项目
 
         Args:
             name: 项目标识（全局唯一，用于 URL 和文件系统）
             content_mode: 创作类型（narration / drama），影响 profile 物化时选哪份变体
+            publish: 是否立即写入最小 project.json；组合创建流程应在完整元数据就绪后再发布
 
         Returns:
             项目目录路径
@@ -406,12 +413,12 @@ class ProjectManager:
         except FileExistsError as exc:
             raise FileExistsError(f"项目 '{name}' 已存在") from exc
 
-        # 持久化 content_mode 到 project.json，让后续 sync_all_agent_profiles 启动遍历能恢复模式。
-        # server 路径随后会调 create_project_metadata 覆盖为完整版（也含 content_mode）。
+        # 单步调用默认持久化 content_mode；组合创建流程可延迟到完整 metadata 一次发布。
         try:
             for subdir in self.SUBDIRS:
                 (project_dir / subdir).mkdir(exist_ok=True)
-            atomic_write_json(project_dir / self.PROJECT_FILE, {"content_mode": content_mode})
+            if publish:
+                atomic_write_json(project_dir / self.PROJECT_FILE, {"content_mode": content_mode})
             self.sync_agent_profile(project_dir, content_mode=content_mode)
         except Exception:
             # sync 失败时回滚 project_dir，避免残缺目录阻塞重试（同名 create 撞 FileExistsError）

@@ -1011,7 +1011,7 @@ async def test_step2_preserves_output_when_formal_script_changes_during_generati
 
 
 @pytest.mark.asyncio
-async def test_promote_step2_draft_after_repair(reference_project: Path):
+async def test_promote_step2_draft_after_repair(reference_project: Path, monkeypatch):
     """修好待修复草稿后晋升：正式剧本落盘、草稿清除，结构仍由 step1 + 正文机械合成。"""
     gen = ScriptGenerator(reference_project, generator=_fake_step2_generator(BAD_STEP2_UNIT_TEXT))
     with pytest.raises(DraftViolation):
@@ -1021,10 +1021,20 @@ async def test_promote_step2_draft_after_repair(reference_project: Path):
     envelope = _json.loads(path.read_text(encoding="utf-8"))
     envelope["content"]["units"][0]["text"] = STEP2_UNIT_TEXT
     path.write_text(_json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    original_save = ProjectManager.save_script
+
+    def tracked_save(self, *args, **kwargs):
+        worker_threads.append(threading.get_ident())
+        return original_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(ProjectManager, "save_script", tracked_save)
 
     out = await ScriptGenerator(reference_project).promote_reference_step2_draft(episode=1)
 
     assert out.exists()
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
     assert not path.exists()
     data = _json.loads(out.read_text(encoding="utf-8"))
     unit = data["video_units"][0]
