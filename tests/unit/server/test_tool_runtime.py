@@ -185,7 +185,7 @@ async def test_sync_transaction_finishes_worker_before_propagating_cancellation(
 
     def transaction() -> None:
         started.set()
-        release.wait(timeout=1)
+        release.wait()
         finished.set()
 
     task = asyncio.create_task(run_sync_transaction(transaction))

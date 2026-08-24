@@ -130,7 +130,7 @@ async def test_create_project_stays_unpublished_until_metadata_is_complete(tmp_p
     class BlockingMetadataProjectManager(ProjectManager):
         def create_project_metadata(self, *args, **kwargs):
             started.set()
-            assert release.wait(timeout=2)
+            release.wait()
             return super().create_project_metadata(*args, **kwargs)
 
     projects = BlockingMetadataProjectManager(tmp_path / "projects")

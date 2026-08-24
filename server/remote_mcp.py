@@ -23,6 +23,7 @@ from lib.db import async_session_factory
 from lib.db.base import DEFAULT_USER_ID
 from lib.project_manager import ProjectManager, get_project_manager
 from lib.script_batch_edit import ScriptBatchEditResult
+from lib.source_loader import SourceLoader
 from lib.source_revision import SourceScope
 from lib.workflow_plan import NarrationDelivery, WorkflowPlanRequest
 from server.auth import API_KEY_PREFIX, _verify_api_key
@@ -89,7 +90,8 @@ _LOCAL_ORIGINS = [
     "http://[::1]",
     "http://[::1]:*",
 ]
-_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
+# One decoded control byte may occupy six JSON bytes (``\u00XX``); leave 1 MiB for the MCP envelope.
+_MAX_REQUEST_BODY_BYTES = SourceLoader.DEFAULT_MAX_BYTES * 6 + 1024 * 1024
 
 
 class ArcApiKeyVerifier(TokenVerifier):
