@@ -422,10 +422,13 @@ def write_step1(
     expected_fingerprint: str | None | _UncheckedFingerprint = UNCHECKED_FINGERPRINT,
     clear_step2_quarantine: bool = True,
     basis: ArtifactBasis | None = None,
+    before_lock: Callable[[], None] | None = None,
 ) -> bool:
     """Run the reference step1 transaction in global lock order: step2 draft, then formal step1."""
     step2_path = quarantine_path(project_path, episode, QUARANTINE_KIND_STEP2)
     pm = ProjectManager(str(project_path.parent))
+    if before_lock is not None:
+        before_lock()
     with pm.file_lock(step2_path), step1_write_lock(project_path, episode):
         return write_step1_locked(
             project_path,

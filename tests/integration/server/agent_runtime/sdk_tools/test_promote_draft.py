@@ -442,6 +442,7 @@ async def test_promote_draft_requires_source_provenance(fake_ctx: ToolContext, m
 
     out = await _promote(fake_ctx)
     assert out.get("is_error") is True
+    assert json.loads(out["content"][0]["text"])["problem"]["code"] == "draft_invalid"
     assert "meta.source 缺失" in out["content"][0]["text"]
     assert not _rv_step1_path(fake_ctx).exists()
 
@@ -1167,6 +1168,41 @@ async def test_split_narration_segments_clears_quarantine_on_regeneration(fake_c
     assert out.get("is_error") is not True, out
     assert not _nr_quarantine_path(fake_ctx).exists()
     assert json.loads(_nr_step1_path(fake_ctx).read_text(encoding="utf-8"))["segments"][0]["duration_seconds"] == 4
+
+
+@pytest.mark.parametrize("segment_id", [" ", "items[0]", "E1S1"])
+async def test_split_narration_segments_rejects_malformed_segment_id(
+    fake_ctx: ToolContext, monkeypatch, segment_id: str
+) -> None:
+    from server import text_generation as mod
+
+    _nr_source(fake_ctx)
+    _use_fake_caps(fake_ctx)
+    monkeypatch.setattr(
+        mod.TextGenerator,
+        "create",
+        _nr_generator_returning([_nr_segment(segment_id, 4, _RV_NOVEL)]),
+    )
+
+    out = await _call(split_narration_segments_tool(fake_ctx), {"episode": 1, "source": "source/episode_1.txt"})
+
+    assert out.get("is_error") is True
+    assert not _nr_step1_path(fake_ctx).exists()
+
+
+async def test_promote_narration_step1_rejects_segment_id_from_another_episode(fake_ctx: ToolContext) -> None:
+    _nr_source(fake_ctx)
+    _write_nr_step1(fake_ctx, [_nr_segment("E1S01", 4, _RV_NOVEL)])
+    await _open_nr_for_edit(fake_ctx, source="source/episode_1.txt")
+    envelope = _read_nr_quarantine(fake_ctx)
+    envelope["content"]["segments"][0]["segment_id"] = "E2S01"
+    _nr_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+
+    out = await _promote_nr(fake_ctx)
+
+    assert out.get("is_error") is True
+    assert "[invalid_segment_id]" in out["content"][0]["text"]
+    assert _nr_quarantine_path(fake_ctx).exists()
 
 
 async def test_promote_narration_step1_reports_schema_breach_without_writing(fake_ctx: ToolContext) -> None:

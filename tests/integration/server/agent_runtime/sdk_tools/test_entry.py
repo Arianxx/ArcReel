@@ -63,3 +63,46 @@ async def test_upload_source_closes_temporary_file_before_loading(tmp_path: Path
 
     assert json.loads(uploaded["content"][0]["text"])["source"]["path"] == "source/novel.txt"
     assert not tracked["path"].exists()  # type: ignore[union-attr]
+
+
+async def test_upload_source_cleans_temporary_file_when_write_fails(tmp_path: Path, monkeypatch) -> None:
+    from server import tool_runtime
+
+    projects = ProjectManager(tmp_path / "projects")
+    ctx = ToolContext("session", projects.projects_root, pm=projects)
+    await create_project_tool(ctx).handler(
+        {
+            "name": "demo",
+            "title": "Demo",
+            "content_mode": "narration",
+            "generation_mode": "storyboard",
+        }
+    )
+    tracked: dict[str, Path] = {}
+    original_temp = tool_runtime.tempfile.NamedTemporaryFile
+
+    class FailingWrite:
+        def __init__(self, *args, **kwargs):
+            self.handle = original_temp(*args, **kwargs)
+            self.name = self.handle.name
+            tracked["path"] = Path(self.name)
+
+        def __enter__(self):
+            self.handle.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def write(self, _content: bytes) -> None:
+            raise OSError("disk full")
+
+        def flush(self) -> None:
+            self.handle.flush()
+
+    monkeypatch.setattr(tool_runtime.tempfile, "NamedTemporaryFile", FailingWrite)
+
+    uploaded = await upload_source_tool(ctx).handler({"project": "demo", "filename": "novel.txt", "content": "hello"})
+
+    assert uploaded.get("is_error") is True
+    assert not tracked["path"].exists()

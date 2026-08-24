@@ -555,6 +555,27 @@ async def get_source_text(
         return ToolOutcome(problem=_file_problem("get_source_text", exc))
 
 
+def _get_step1_content_sync(project_name: str, episode: int, projects: ProjectManager) -> Step1Content | None:
+    project = projects.load_project_readonly(project_name)
+    kind = step1_kind(project)
+    if kind is None:
+        return None
+    names = (
+        (REFERENCE_VIDEO_STEP1_FILENAME, REFERENCE_VIDEO_STEP1_LEGACY_FILENAME)
+        if kind == "reference_video"
+        else (STEP1_FILENAMES[kind], *STEP1_LEGACY_FILENAMES.get(kind, ()))
+    )
+    project_dir = projects.get_project_path(project_name)
+    for name in names:
+        relative = f"drafts/episode_{episode}/{name}"
+        try:
+            content, revision, etag, _size = _decode_business_file(project_dir, relative)
+        except FileNotFoundError:
+            continue
+        return Step1Content(revision=revision, etag=etag, episode=episode, path=relative, content=content)
+    raise FileNotFoundError
+
+
 async def get_step1_content(
     request: ToolRequest[int],
     scope: ProjectScope,
@@ -565,32 +586,10 @@ async def get_step1_content(
     if not isinstance(episode, int) or isinstance(episode, bool) or episode < 1:
         return ToolOutcome(problem=ToolProblem("invalid_request", "episode 必须是正整数"))
     try:
-        project = services.projects.load_project_readonly(scope.project_name)
-        kind = step1_kind(project)
-        if kind is None:
+        result = await asyncio.to_thread(_get_step1_content_sync, scope.project_name, episode, services.projects)
+        if result is None:
             return ToolOutcome(problem=ToolProblem("step1_not_applicable", "当前项目没有 step1 中间态"))
-        names = (
-            (REFERENCE_VIDEO_STEP1_FILENAME, REFERENCE_VIDEO_STEP1_LEGACY_FILENAME)
-            if kind == "reference_video"
-            else (STEP1_FILENAMES[kind], *STEP1_LEGACY_FILENAMES.get(kind, ()))
-        )
-        project_dir = services.projects.get_project_path(scope.project_name)
-        for name in names:
-            relative = f"drafts/episode_{episode}/{name}"
-            try:
-                content, revision, etag, _size = await asyncio.to_thread(_decode_business_file, project_dir, relative)
-            except FileNotFoundError:
-                continue
-            return ToolOutcome(
-                value=Step1Content(
-                    revision=revision,
-                    etag=etag,
-                    episode=episode,
-                    path=relative,
-                    content=content,
-                )
-            )
-        raise FileNotFoundError
+        return ToolOutcome(value=result)
     except Exception as exc:  # noqa: BLE001
         return ToolOutcome(problem=_file_problem("get_step1_content", exc))
 
@@ -817,11 +816,12 @@ async def upload_source(
             raise UnsupportedFormatError(ext=suffix)
         if not services.projects.project_exists(scope.project_name):
             raise FileNotFoundError(f"项目 '{scope.project_name}' 缺少 project.json")
-        with tempfile.NamedTemporaryFile(suffix=Path(value.filename).suffix, delete=False) as source:
-            source_path = Path(source.name)
-            source.write(value.content.encode("utf-8"))
-            source.flush()
+        source_path: Path | None = None
         try:
+            with tempfile.NamedTemporaryFile(suffix=Path(value.filename).suffix, delete=False) as source:
+                source_path = Path(source.name)
+                source.write(value.content.encode("utf-8"))
+                source.flush()
             with services.projects.locked_source_mutation(scope.project_name) as source_dir:
                 result = SourceLoader.load(
                     source_path,
@@ -830,7 +830,8 @@ async def upload_source(
                     on_conflict=value.on_conflict,
                 )
         finally:
-            source_path.unlink(missing_ok=True)
+            if source_path is not None:
+                source_path.unlink(missing_ok=True)
         return {
             "filename": result.normalized_path.name,
             "path": f"source/{result.normalized_path.name}",

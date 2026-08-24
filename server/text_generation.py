@@ -168,6 +168,49 @@ def _commit_generated_reference_step1(
     clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
 
 
+def _commit_single_step1(
+    project_path: Path,
+    episode: int,
+    step1_path: Path,
+    kind: str,
+    content: dict[str, Any],
+    expected_fingerprint: Any,
+    basis: ArtifactBasis | None,
+) -> None:
+    with script_review.formal_step1_lock(project_path, episode, step1_path):
+        script_review.write_formal_step1_locked(
+            project_path,
+            episode,
+            step1_path,
+            content,
+            expected_fingerprint=expected_fingerprint,
+            basis=basis,
+        )
+        clear_quarantine(project_path, episode, kind)
+
+
+def _quarantine_narration_generation(
+    project_path: Path,
+    episode: int,
+    step1_path: Path,
+    content: dict[str, Any],
+    violations: list[DraftViolation],
+    source: str | None,
+) -> str:
+    with script_review.formal_step1_lock(project_path, episode, step1_path):
+        return quarantine_and_report(
+            project_path,
+            episode,
+            QUARANTINE_KIND_NARRATION_STEP1,
+            content=content,
+            violations=violations,
+            meta={
+                "source": source or None,
+                "base_fingerprint": script_review.content_fingerprint(step1_path),
+            },
+        )
+
+
 def _instructions(value: Any) -> str | None:
     if value is None:
         return None
@@ -339,16 +382,7 @@ def _resolve_step1_path(project_path: Path, episode: int, project_data: dict[str
     return step1_json, "split-narration-segments 子智能体 (Step 1)"
 
 
-async def generate_episode_script(
-    request: TextGenerationRequest,
-    *,
-    project_name: str,
-    projects: ProjectManager,
-    config_resolver: ConfigResolver,
-) -> TextGenerationResult:
-    episode = request.episode
-    instructions = _instructions(request.instructions)
-    project_path = projects.get_project_path(project_name)
+def _episode_generation_preflight(project_path: Path, episode: int, *, enforce_review_gate: bool) -> None:
     try:
         project_data = json.loads((project_path / "project.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -372,17 +406,35 @@ async def generate_episode_script(
         if not step1_path.exists():
             raise TextGenerationError(f"❌ 未找到 Step 1 文件: {step1_path}\n   请先完成 {hint}")
 
+    if enforce_review_gate and script_review.gate_blocks_step2(project_path, project_data, episode):
+        raise TextGenerationError(
+            "⏸️ step1 结构化中间态尚未完成内容确认，step2 视觉生成被阻塞。"
+            "请在 Web 端审阅并确认本集 step1 内容后再生成剧本。"
+        )
+
+
+async def generate_episode_script(
+    request: TextGenerationRequest,
+    *,
+    project_name: str,
+    projects: ProjectManager,
+    config_resolver: ConfigResolver,
+) -> TextGenerationResult:
+    episode = request.episode
+    instructions = _instructions(request.instructions)
+    project_path = projects.get_project_path(project_name)
+    await asyncio.to_thread(
+        _episode_generation_preflight,
+        project_path,
+        episode,
+        enforce_review_gate=not request.dry_run,
+    )
+
     try:
         if request.dry_run:
             generator = ScriptGenerator(project_path, config_resolver=config_resolver)
             prompt = await generator.build_prompt(episode, instructions=instructions)
             return TextGenerationResult(f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}")
-
-        if script_review.gate_blocks_step2(project_path, project_data, episode):
-            raise TextGenerationError(
-                "⏸️ step1 结构化中间态尚未完成内容确认，step2 视觉生成被阻塞。"
-                "请在 Web 端审阅并确认本集 step1 内容后再生成剧本。"
-            )
 
         generator = await ScriptGenerator.create(project_path, config_resolver=config_resolver)
         result_path = await generator.generate(episode=episode, instructions=instructions)
@@ -542,16 +594,16 @@ async def generate_drama_step1(
         async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             _assert_draft_revision(draft_path, draft_baseline)
             try:
-                with script_review.formal_step1_lock(project_path, episode, step1_path):
-                    script_review.write_formal_step1_locked(
-                        project_path,
-                        episode,
-                        step1_path,
-                        content,
-                        expected_fingerprint=formal_baseline,
-                        basis=step1_basis,
-                    )
-                    clear_quarantine(project_path, episode, QUARANTINE_KIND_DRAMA_STEP1)
+                await run_sync_transaction(
+                    _commit_single_step1,
+                    project_path,
+                    episode,
+                    step1_path,
+                    QUARANTINE_KIND_DRAMA_STEP1,
+                    content,
+                    formal_baseline,
+                    step1_basis,
+                )
             except script_review.Step1WriteConflict as exc:
                 raise TextGenerationError(
                     _quarantine_formal_generation_conflict(
@@ -900,6 +952,7 @@ def _covers_source_verbatim(parts: list[str], source: str) -> bool:
 def _collect_narration_violations(
     segments: list[dict[str, Any]],
     *,
+    episode: int,
     supported_durations: list[int],
     characters: dict[str, Any],
     scenes: dict[str, Any],
@@ -922,6 +975,19 @@ def _collect_narration_violations(
     该改分镜还是该改范围。
     """
     violations: list[DraftViolation] = []
+
+    expected_id = re.compile(rf"E{episode}S\d{{2}}")
+    for index, segment in enumerate(segments):
+        segment_id = segment.get("segment_id")
+        if not isinstance(segment_id, str) or expected_id.fullmatch(segment_id) is None:
+            label = _narration_segment_label(segment, index)
+            violations.append(
+                DraftViolation(
+                    f"{label} 的 segment_id 必须为 E{episode}S## 格式且集号匹配",
+                    code="invalid_segment_id",
+                    label=label,
+                )
+            )
 
     dupes = sorted(str(sid) for sid, count in Counter(s.get("segment_id") for s in segments).items() if count > 1)
     if dupes:
@@ -1236,6 +1302,7 @@ async def generate_narration_step1(
 
         violations = _collect_narration_violations(
             raw_segments,
+            episode=episode,
             supported_durations=supported_durations,
             characters=characters,
             scenes=scenes,
@@ -1246,33 +1313,30 @@ async def generate_narration_step1(
         if violations:
             async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
                 _assert_draft_revision(draft_path, draft_baseline)
-                with script_review.formal_step1_lock(project_path, episode, step1_path):
-                    report = quarantine_and_report(
-                        project_path,
-                        episode,
-                        QUARANTINE_KIND_NARRATION_STEP1,
-                        content=content,
-                        violations=violations,
-                        meta={
-                            "source": request.source or None,
-                            "base_fingerprint": script_review.content_fingerprint(step1_path),
-                        },
-                    )
+                report = await run_sync_transaction(
+                    _quarantine_narration_generation,
+                    project_path,
+                    episode,
+                    step1_path,
+                    content,
+                    violations,
+                    request.source,
+                )
             raise TextGenerationError(report)
 
         async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             _assert_draft_revision(draft_path, draft_baseline)
             try:
-                with script_review.formal_step1_lock(project_path, episode, step1_path):
-                    script_review.write_formal_step1_locked(
-                        project_path,
-                        episode,
-                        step1_path,
-                        content,
-                        expected_fingerprint=formal_baseline,
-                        basis=step1_basis,
-                    )
-                    clear_quarantine(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
+                await run_sync_transaction(
+                    _commit_single_step1,
+                    project_path,
+                    episode,
+                    step1_path,
+                    QUARANTINE_KIND_NARRATION_STEP1,
+                    content,
+                    formal_baseline,
+                    step1_basis,
+                )
             except script_review.Step1WriteConflict as exc:
                 raise TextGenerationError(
                     _quarantine_formal_generation_conflict(

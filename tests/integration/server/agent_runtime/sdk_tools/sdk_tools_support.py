@@ -218,6 +218,9 @@ class _FakePM:
         self._mirror(filename)
         return self.script_payload
 
+    def load_script_readonly(self, _name: str, _filename: str) -> dict[str, Any]:
+        return self.script_payload
+
     def project_exists(self, _name: str) -> bool:
         return True
 

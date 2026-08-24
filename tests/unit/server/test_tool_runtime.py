@@ -259,12 +259,15 @@ async def test_patch_episode_meta_returns_typed_domain_outcome(tmp_path: Path, m
 async def test_content_readers_return_body_and_revision_from_the_same_snapshot(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "demo"
     (project_dir / "scripts").mkdir(parents=True)
+    step1_dir = project_dir / "drafts" / "episode_1"
+    step1_dir.mkdir(parents=True)
     (project_dir / "project.json").write_text(
         f'{{"content_mode":"drama","schema_version":{CURRENT_PROJECT_SCHEMA_VERSION}}}', encoding="utf-8"
     )
     (project_dir / "scripts" / "episode_1.json").write_text(
         '{"episode":1,"title":"第一集","scenes":[]}', encoding="utf-8"
     )
+    (step1_dir / "step1_normalized_script.json").write_text('{"title":"第一集","scenes":[]}', encoding="utf-8")
     projects = ProjectManager(tmp_path)
     services = Services(projects=projects, workflow_planner=_Planner(_status()), capabilities=_Capabilities())
     scope = ProjectScope("demo", tmp_path)
@@ -287,6 +290,7 @@ async def test_content_readers_return_body_and_revision_from_the_same_snapshot(t
 
     project = await get_project_content(ToolRequest(None), scope, caller, services)
     script = await get_episode_script(ToolRequest("episode_1.json"), scope, caller, services)
+    step1 = await get_step1_content(ToolRequest(1), scope, caller, services)
 
     assert project.problem is None
     assert project.value is not None
@@ -296,7 +300,10 @@ async def test_content_readers_return_body_and_revision_from_the_same_snapshot(t
     assert script.value is not None
     assert script.value.script["title"] == "第一集"
     assert script.value.revision.startswith("sha256-v1:")
-    assert len(reader_threads) == 2
+    assert step1.problem is None
+    assert step1.value is not None
+    assert step1.value.content["title"] == "第一集"
+    assert len(reader_threads) == 3
     assert all(thread != caller_thread for thread in reader_threads)
 
 
