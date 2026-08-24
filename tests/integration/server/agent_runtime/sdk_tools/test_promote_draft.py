@@ -258,8 +258,6 @@ async def test_promote_conflicts_when_official_changed_after_open(fake_ctx: Tool
     out = await _promote(fake_ctx)
 
     assert out.get("is_error") is True
-    assert "并发冲突" in out["content"][0]["text"]
-    assert "base_revision" in out["content"][0]["text"]
     report = out["content"][0]["text"]
     assert "并发冲突" in report
     assert "accept_formal_revision" in report
@@ -360,6 +358,8 @@ async def test_split_violation_quarantine_records_base_fingerprint(fake_ctx: Too
     out = await _promote(fake_ctx)
 
     assert out.get("is_error") is True
+    assert "并发冲突" in out["content"][0]["text"]
+    assert "base_revision" in out["content"][0]["text"]
 
 
 async def test_split_violation_keeps_pre_generation_formal_baseline(fake_ctx: ToolContext, monkeypatch) -> None:
@@ -399,7 +399,7 @@ async def test_split_violation_keeps_pre_generation_formal_baseline(fake_ctx: To
     release.set()
 
     with pytest.raises(TextGenerationError):
-        await generation
+        await asyncio.wait_for(generation, timeout=1)
 
     current = script_review.content_fingerprint(_rv_step1_path(fake_ctx))
     assert current != expected
