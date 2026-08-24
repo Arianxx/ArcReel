@@ -178,6 +178,8 @@ ArcReel 在应用启动时运行 Alembic 迁移，将数据库结构升级到当
 
 远程 MCP 同时提供 `list_projects`、`create_project`、`upload_source` 三个项目入口工具，以及 `open_draft`、`patch_draft`、`promote_draft`、`discard_draft` 四个草稿工具。草稿工具要求显式传入 `project`，并使用 revision 防止并发覆盖。
 
+文本与剧本工具同样可远程调用：`generate_step1`、`generate_episode_script`、`confirm_script_review` 和 `patch_episode_script`。其中剧本修改必须携带读取时取得的 revision，并以 operations 原子提交。
+
 ArcReel 的沙箱要求父进程环境中不保留供应商密钥。以下凭据环境变量存在非空值时，服务会拒绝启动并提示迁移到 WebUI 设置页：
 
 - `ANTHROPIC_API_KEY`

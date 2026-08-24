@@ -177,6 +177,8 @@ Remote MCP provides seven content-reading tools: `get_project_content`, `list_so
 
 Remote MCP also provides three project entry tools, `list_projects`, `create_project`, and `upload_source`, plus four draft tools: `open_draft`, `patch_draft`, `promote_draft`, and `discard_draft`. Draft tools require an explicit `project` and use revisions to prevent concurrent overwrites.
 
+Text and script tools are also available remotely: `generate_step1`, `generate_episode_script`, `confirm_script_review`, and `patch_episode_script`. Script edits must include the revision returned by a reader and submit operations atomically.
+
 ArcReel's sandbox requires provider secrets to be absent from the parent process environment. If any of the following credential environment variables has a non-empty value, the service refuses to start and prompts you to move the credential to the Web UI Settings page:
 
 - `ANTHROPIC_API_KEY`

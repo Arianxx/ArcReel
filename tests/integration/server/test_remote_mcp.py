@@ -213,6 +213,12 @@ async def test_remote_mcp_returns_typed_workflow_plan_and_rejects_bad_project(re
         "read_project_file",
     }
     drafts = {"open_draft", "patch_draft", "promote_draft", "discard_draft"}
+    text_and_script = {
+        "generate_episode_script",
+        "generate_step1",
+        "confirm_script_review",
+        "patch_episode_script",
+    }
     retired = {
         "normalize_drama_script",
         "split_narration_segments",
@@ -225,9 +231,11 @@ async def test_remote_mcp_returns_typed_workflow_plan_and_rejects_bad_project(re
         "get_episode_script_revision",
     }
     listed = {tool.name: tool for tool in tools.tools}
-    assert migrated | readers | drafts <= listed.keys()
+    assert migrated | readers | drafts | text_and_script <= listed.keys()
     assert retired.isdisjoint(listed)
-    assert all("project" in listed[name].inputSchema["required"] for name in migrated | readers | drafts)
+    assert all(
+        "project" in listed[name].inputSchema["required"] for name in migrated | readers | drafts | text_and_script
+    )
     assert result.structuredContent is not None
     assert result.structuredContent["workflow_plan"]["status"]["target"]["episode"] == 1
     assert capabilities.structuredContent == {
@@ -335,6 +343,51 @@ async def test_remote_mcp_draft_supports_multiple_patches_and_discard(remote_ser
     assert not reopened.isError
     assert not promoted.isError
     assert promoted.structuredContent["draft"]["promoted"] is True
+
+
+async def test_remote_mcp_text_generation_and_script_patch_return_structured_content(remote_server) -> None:
+    app = _mounted(remote_server)
+    async with remote_server.session_manager.run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            headers={"Authorization": "Bearer arc-valid"},
+            follow_redirects=True,
+        ) as client:
+            async with streamable_http_client("http://localhost/mcp", http_client=client) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    step1 = await session.call_tool(
+                        "generate_step1",
+                        {
+                            "project": "demo",
+                            "episode": 1,
+                            "source": "source/episode_1.txt",
+                            "dry_run": True,
+                        },
+                    )
+                    confirmed = await session.call_tool("confirm_script_review", {"project": "demo", "episode": 1})
+                    script = await session.call_tool(
+                        "generate_episode_script", {"project": "demo", "episode": 1, "dry_run": True}
+                    )
+                    patched = await session.call_tool(
+                        "patch_episode_script",
+                        {
+                            "project": "demo",
+                            "script": "episode_1.json",
+                            "base_revision": "sha256-v1:" + "0" * 64,
+                            "operations": [{"op": "remove", "id": "E1S01"}],
+                        },
+                    )
+
+    assert not step1.isError
+    assert step1.structuredContent["text_generation"]["message"]
+    assert not confirmed.isError
+    assert confirmed.structuredContent["text_generation"]["message"]
+    assert script.isError
+    assert script.structuredContent["problem"]["code"] == "internal_error"
+    assert not patched.isError
+    assert patched.structuredContent["script_patch"]["problems"][0]["code"] == "revision_conflict"
 
 
 async def test_remote_mcp_draft_preserves_explicit_null_updates(remote_server, remote_projects) -> None:

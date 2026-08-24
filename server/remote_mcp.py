@@ -6,6 +6,7 @@ import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import asdict, is_dataclass
 from typing import Any, Literal
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -26,12 +27,14 @@ from lib.workflow_plan import NarrationDelivery, WorkflowPlanRequest
 from server.auth import API_KEY_PREFIX, _verify_api_key
 from server.draft_workflow import DraftLocator, PatchDraftRequest
 from server.services import workflow_planner
+from server.text_generation import TextGenerationRequest
 from server.tool_runtime import (
     CallerContext,
     CompleteAssetInventoryRequest,
     CompleteStep1RebuildRequest,
     CreateProjectToolRequest,
     PatchEpisodeMetaRequest,
+    PatchEpisodeScriptRequest,
     PatchProjectRequest,
     PlanEpisodesRequest,
     ProjectScope,
@@ -44,8 +47,11 @@ from server.tool_runtime import (
     UploadSourceRequest,
     complete_asset_inventory,
     complete_step1_rebuild,
+    confirm_script_review,
     create_project,
     discard_draft,
+    generate_episode_script,
+    generate_step1,
     get_episode_script,
     get_project_content,
     get_source_text,
@@ -59,6 +65,7 @@ from server.tool_runtime import (
     open_draft,
     patch_draft,
     patch_episode_meta,
+    patch_episode_script,
     patch_project,
     plan_episodes,
     promote_draft,
@@ -111,7 +118,12 @@ def _to_mcp_result(domain_key: str, outcome: ToolOutcome[Any]) -> CallToolResult
             isError=True,
         )
     value = outcome.value
-    payload = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+    if isinstance(value, BaseModel):
+        payload = value.model_dump(mode="json")
+    elif is_dataclass(value) and not isinstance(value, type):
+        payload = asdict(value)
+    else:
+        payload = value
     structured = {domain_key: payload}
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(structured, ensure_ascii=False))],
@@ -291,6 +303,80 @@ def build_remote_mcp_server(
         if problem := await migration_gate(scope, services):
             return _to_mcp_result("draft", ToolOutcome(problem=problem))
         return _to_mcp_result("draft", await discard_draft(ToolRequest(request), scope, caller, services))
+
+    @server.tool(name="generate_episode_script", structured_output=False)
+    async def remote_generate_episode_script(
+        project: str,
+        episode: int,
+        instructions: str | None = None,
+        dry_run: bool = False,
+    ) -> CallToolResult:
+        """Generate an episode script, or return its prompt when dry_run is true."""
+        try:
+            scope = _project_scope(project, projects)
+            request = TextGenerationRequest(episode=episode, instructions=instructions, dry_run=dry_run)
+        except (FileNotFoundError, ValueError) as exc:
+            return _to_mcp_result("text_generation", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
+        if problem := await migration_gate(scope, services):
+            return _to_mcp_result("text_generation", ToolOutcome(problem=problem))
+        return _to_mcp_result(
+            "text_generation", await generate_episode_script(ToolRequest(request), scope, caller, services)
+        )
+
+    @server.tool(name="generate_step1", structured_output=False)
+    async def remote_generate_step1(
+        project: str,
+        episode: int,
+        source: str | None = None,
+        instructions: str | None = None,
+        dry_run: bool = False,
+    ) -> CallToolResult:
+        """Generate the project-appropriate structured step1 document."""
+        try:
+            scope = _project_scope(project, projects)
+            request = TextGenerationRequest(
+                episode=episode,
+                source=source,
+                instructions=instructions,
+                dry_run=dry_run,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return _to_mcp_result("text_generation", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
+        if problem := await migration_gate(scope, services):
+            return _to_mcp_result("text_generation", ToolOutcome(problem=problem))
+        return _to_mcp_result("text_generation", await generate_step1(ToolRequest(request), scope, caller, services))
+
+    @server.tool(name="confirm_script_review", structured_output=False)
+    async def remote_confirm_script_review(project: str, episode: int) -> CallToolResult:
+        """Confirm one episode's step1 review before visual generation."""
+        try:
+            scope = _project_scope(project, projects)
+        except (FileNotFoundError, ValueError) as exc:
+            return _to_mcp_result("text_generation", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
+        if problem := await migration_gate(scope, services):
+            return _to_mcp_result("text_generation", ToolOutcome(problem=problem))
+        return _to_mcp_result(
+            "text_generation", await confirm_script_review(ToolRequest(episode), scope, caller, services)
+        )
+
+    @server.tool(name="patch_episode_script", structured_output=False)
+    async def remote_patch_episode_script(
+        project: str,
+        script: str,
+        base_revision: str,
+        operations: list[dict[str, Any]],
+    ) -> CallToolResult:
+        """Atomically apply revisioned update, insert, remove, or split operations."""
+        try:
+            scope = _project_scope(project, projects)
+            request = PatchEpisodeScriptRequest.model_validate(
+                {"script": script, "base_revision": base_revision, "operations": operations}
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return _to_mcp_result("script_patch", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
+        if problem := await migration_gate(scope, services):
+            return _to_mcp_result("script_patch", ToolOutcome(problem=problem))
+        return _to_mcp_result("script_patch", await patch_episode_script(ToolRequest(request), scope, caller, services))
 
     @server.tool(name="get_workflow_plan", structured_output=False)
     async def remote_workflow_plan(
