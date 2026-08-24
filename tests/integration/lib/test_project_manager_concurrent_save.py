@@ -94,6 +94,31 @@ class TestSaveScriptConcurrency:
         await asyncio.wait_for(task, timeout=1)
         holder.join(timeout=1)
 
+    async def test_async_file_lock_times_out_and_can_be_retried(self, tmp_path: Path) -> None:
+        pm = ProjectManager(tmp_path)
+        path = tmp_path / "draft.json"
+        held = threading.Event()
+        release = threading.Event()
+
+        def hold_lock() -> None:
+            with pm.file_lock(path):
+                held.set()
+                release.wait(timeout=2)
+
+        holder = threading.Thread(target=hold_lock)
+        holder.start()
+        assert await asyncio.to_thread(held.wait, 1)
+        try:
+            with pytest.raises(TimeoutError, match="acquiring lock timed out"):
+                async with pm.async_file_lock(path, timeout=0.05):
+                    pass
+        finally:
+            release.set()
+            holder.join(timeout=1)
+
+        async with pm.async_file_lock(path, timeout=0.1):
+            pass
+
     def test_save_script_rejects_stale_expected_fingerprint(self, tmp_path: Path) -> None:
         pm = ProjectManager(tmp_path)
         name = "proj-occ"

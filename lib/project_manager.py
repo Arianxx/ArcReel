@@ -1893,18 +1893,21 @@ class ProjectManager:
             yield source_dir
 
     @asynccontextmanager
-    async def async_file_lock(self, path: Path) -> AsyncIterator[None]:
-        """Cancellation-safe async counterpart of :meth:`file_lock`."""
+    async def async_file_lock(self, path: Path, *, timeout: float = 30.0) -> AsyncIterator[None]:
+        """Cancellation-safe async counterpart of :meth:`file_lock` with bounded acquisition."""
         path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = path.parent / f".{path.name}.lock"
         handle = lock_path.open("a+b")
         acquired = False
+        deadline = asyncio.get_running_loop().time() + timeout
         try:
             while not acquired:
                 try:
                     portalocker.lock(handle, portalocker.LOCK_EX | portalocker.LOCK_NB)
                     acquired = True
                 except (portalocker.AlreadyLocked, portalocker.LockException):
+                    if asyncio.get_running_loop().time() >= deadline:
+                        raise TimeoutError(f"acquiring lock timed out after {timeout}s: {lock_path}")
                     await asyncio.sleep(0.05)
             yield
         finally:
