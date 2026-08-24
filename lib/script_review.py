@@ -25,7 +25,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -364,7 +364,8 @@ def write_formal_step1_locked(
     下游草稿。返回内容是否发生变化。
 
     调用方须已持有该文件的排他锁（``formal_step1_lock``，或同一路径的
-    ``ProjectManager.file_lock``——锁不可重入，已在临界区内的调用方不能再套一层）。三个变体
+    ``ProjectManager.file_lock``——锁不可重入，已在临界区内的调用方不能再套一层）；指定
+    ``dependent_quarantine`` 时还须先持有该草稿锁，统一锁序为「下游草稿 → 正式 step1」。三个变体
     的全部写路径（Web 端保存、重拆分 / 重规范化、晋升、迁移回写）汇入本函数。正式 step1
     之所以对 Agent 写禁，正是因为写盘只发生在这一个持锁的出口。
 
@@ -383,10 +384,7 @@ def write_formal_step1_locked(
     changed = previous != content
     quarantine = None if dependent_quarantine is None else quarantine_path(project_path, episode, dependent_quarantine)
     paths = (path,) if quarantine is None else (path, quarantine)
-    quarantine_lock = (
-        ProjectManager(str(project_path.parent)).file_lock(quarantine) if quarantine is not None else nullcontext()
-    )
-    with quarantine_lock, formal_step1_write_transaction(project_path, episode, *paths, basis=basis):
+    with formal_step1_write_transaction(project_path, episode, *paths, basis=basis):
         atomic_write_json(path, content)
         if changed and clear_dependent_quarantine and dependent_quarantine is not None:
             clear_quarantine(project_path, episode, dependent_quarantine)
@@ -425,8 +423,10 @@ def write_step1(
     clear_step2_quarantine: bool = True,
     basis: ArtifactBasis | None = None,
 ) -> bool:
-    """Run the complete reference step1 write transaction under its synchronous locks."""
-    with step1_write_lock(project_path, episode):
+    """Run the reference step1 transaction in global lock order: step2 draft, then formal step1."""
+    step2_path = quarantine_path(project_path, episode, QUARANTINE_KIND_STEP2)
+    pm = ProjectManager(str(project_path.parent))
+    with pm.file_lock(step2_path), step1_write_lock(project_path, episode):
         return write_step1_locked(
             project_path,
             episode,

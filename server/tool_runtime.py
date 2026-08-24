@@ -761,7 +761,7 @@ async def list_projects(
         result = []
         for name in sorted(services.projects.list_projects()):
             try:
-                project = services.projects.load_project(name)
+                project = services.projects.load_project_readonly(name)
             except (FileNotFoundError, ValueError):
                 continue
             result.append(

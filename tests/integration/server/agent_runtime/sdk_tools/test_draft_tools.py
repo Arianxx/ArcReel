@@ -254,12 +254,11 @@ async def test_step1_write_cannot_race_a_step2_draft_patch(fake_ctx: ToolContext
         )
 
     def rewrite_step1() -> None:
-        with script_review.step1_write_lock(fake_ctx.project_path, 1):
-            script_review.write_step1_locked(
-                fake_ctx.project_path,
-                1,
-                {"units": [_rv_saved_unit("@[张三] 修改 step1")]},
-            )
+        script_review.write_step1(
+            fake_ctx.project_path,
+            1,
+            {"units": [_rv_saved_unit("@[张三] 修改 step1")]},
+        )
 
     patch_task = asyncio.create_task(asyncio.to_thread(patch))
     assert await asyncio.to_thread(patch_reached_write.wait, 1)

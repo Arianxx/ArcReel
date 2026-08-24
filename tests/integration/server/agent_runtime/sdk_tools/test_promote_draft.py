@@ -6,7 +6,7 @@ import asyncio
 import copy
 import json
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 import pytest
 
@@ -248,6 +248,7 @@ async def test_promote_conflicts_when_official_changed_after_open(fake_ctx: Tool
     assert "并发冲突" in report
     assert "accept_formal_revision" in report
     assert "patch_draft" in report
+    assert "base_revision" in report
     assert 'doc_type\\": \\"reference_step1' in report
     # 冲突报告附上盘上现值的扁平草稿单元，供 Agent 对照合并
     assert "在 @[村口] 等候" in report
@@ -344,6 +345,7 @@ async def test_split_violation_quarantine_records_base_fingerprint(fake_ctx: Too
 
     assert out.get("is_error") is True
     assert "并发冲突" in out["content"][0]["text"]
+    assert "base_revision" in out["content"][0]["text"]
 
 
 @pytest.mark.parametrize(
@@ -461,6 +463,63 @@ async def test_writing_reference_step1_clears_stale_step2_quarantine(fake_ctx: T
 
     assert out.get("is_error") is not True, out
     assert not step2_path.exists()
+
+
+async def test_reference_step1_generation_and_step2_promotion_complete_without_lock_inversion(
+    fake_ctx: ToolContext, monkeypatch
+) -> None:
+    from server import draft_workflow as mod
+
+    _rv_source(fake_ctx)
+    _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
+    step2_path = quarantine_path(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2)
+    write_quarantine(
+        fake_ctx.project_path,
+        1,
+        QUARANTINE_KIND_STEP2,
+        content={"title": "第1集", "units": [{"text": "@[张三] 起身"}]},
+        violations=[],
+    )
+    promotion_holds_step2 = asyncio.Event()
+    allow_promotion_formal_read = asyncio.Event()
+
+    class _FakeGenerator:
+        @classmethod
+        async def create(cls, project_path, **_kwargs):
+            obj = cls()
+            obj.project_path = project_path
+            return obj
+
+        async def promote_reference_step2_draft(self, episode: int, **_kwargs):
+            promotion_holds_step2.set()
+            await allow_promotion_formal_read.wait()
+            with script_review.step1_write_lock(self.project_path, episode):
+                pass
+            return self.project_path / "scripts" / f"episode_{episode}.json"
+
+    monkeypatch.setattr(mod, "ScriptGenerator", _FakeGenerator)
+    monkeypatch.setattr(mod.script_review, "gate_blocks_step2", lambda *_args: False)
+    generation_attempted_step2 = threading.Event()
+    original_file_lock = ProjectManager.file_lock
+
+    @contextmanager
+    def observed_file_lock(self, path):
+        if path == step2_path:
+            generation_attempted_step2.set()
+        with original_file_lock(self, path):
+            yield
+
+    monkeypatch.setattr(ProjectManager, "file_lock", observed_file_lock)
+    promotion = asyncio.create_task(_promote(fake_ctx))
+    await asyncio.wait_for(promotion_holds_step2.wait(), timeout=1)
+    generation = asyncio.create_task(_run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[张三] 起身")]))
+    assert await asyncio.to_thread(generation_attempted_step2.wait, 1)
+    allow_promotion_formal_read.set()
+
+    promoted, generated = await asyncio.wait_for(asyncio.gather(promotion, generation), timeout=2)
+
+    assert promoted.get("is_error") is not True, promoted
+    assert generated.get("is_error") is not True, generated
 
 
 async def test_promote_reference_step1_preserves_step2_draft_when_content_unchanged(fake_ctx: ToolContext) -> None:

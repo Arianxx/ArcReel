@@ -323,7 +323,8 @@ def _render_step1_conflict_report(
         f"{latest_block}\n\n"
         f"处置：调用 open_draft 读取当前草稿与 formal_revision，对照上方最新内容合并 {field_hint}；"
         "再调用 patch_draft 提交完整 content，并把 formal_revision 作为 accept_formal_revision；"
-        f'最后调用 {PROMOTE_TOOL_NAME}({{"episode": {episode}, "doc_type": "{doc_type}"}}) 重新晋升。'
+        f'最后调用 {PROMOTE_TOOL_NAME}({{"episode": {episode}, "doc_type": "{doc_type}", '
+        '"base_revision": "<patch_draft 返回的新 revision>"}) 重新晋升。'
     )
 
 
@@ -343,7 +344,8 @@ def _render_step2_conflict_report(
         f"当前正式剧本的最新内容：\n{latest}\n\n"
         "处置：调用 open_draft 读取当前草稿与 formal_revision，合并最新正式内容；"
         "再调用 patch_draft 提交完整 content，并把 formal_revision 作为 accept_formal_revision；"
-        f'最后调用 {PROMOTE_TOOL_NAME}({{"episode": {episode}, "doc_type": "reference_step2"}}) 重新晋升。'
+        f'最后调用 {PROMOTE_TOOL_NAME}({{"episode": {episode}, "doc_type": "reference_step2", '
+        '"base_revision": "<patch_draft 返回的新 revision>"}) 重新晋升。'
     )
 
 

@@ -47,6 +47,7 @@ from lib.draft_quarantine import (
     QUARANTINE_KIND_STEP1,
     QUARANTINE_KIND_STEP2,
     clear_quarantine,
+    draft_revision,
     quarantine_and_report,
     quarantine_path,
     read_quarantine,
@@ -538,6 +539,11 @@ class ScriptGenerator:
         assert self.generator is not None  # generate() 入口已检查
         filename = output_filename or episode_script_filename(episode)
         formal_baseline = content_fingerprint(self.project_path / "scripts" / filename)
+        step2_draft_baseline = (
+            await asyncio.to_thread(self._reference_step2_draft_revision, episode)
+            if reference_step1 is not None
+            else None
+        )
         # 调用 TextBackend
         logger.info("正在生成第 %d 集剧本...", episode)
         result = await self._generate_text(
@@ -562,7 +568,13 @@ class ScriptGenerator:
                     reference_step1, response_text, episode, max_refs=reference_max_refs
                 )
             except DraftViolation as exc:
-                raise await asyncio.to_thread(self._quarantine_reference_step2, episode, response_text, exc) from exc
+                raise await asyncio.to_thread(
+                    self._quarantine_reference_step2,
+                    episode,
+                    response_text,
+                    exc,
+                    expected_draft_revision=step2_draft_baseline,
+                ) from exc
         else:
             script_data = (
                 self._parse_ad_reference_response(response_text, episode)
@@ -580,7 +592,13 @@ class ScriptGenerator:
         except DraftViolation as exc:
             if reference_step1 is None:
                 raise
-            raise await asyncio.to_thread(self._quarantine_reference_step2, episode, response_text, exc) from exc
+            raise await asyncio.to_thread(
+                self._quarantine_reference_step2,
+                episode,
+                response_text,
+                exc,
+                expected_draft_revision=step2_draft_baseline,
+            ) from exc
 
         # 经写盘统一入口保存：整集生成无「改前」，按严格结构校验（等价原 response_schema 的
         # Pydantic 校验），并继承 metadata 重算、加锁、filename↔episode 一致性与 project.json
@@ -607,6 +625,7 @@ class ScriptGenerator:
                     code="formal_revision_conflict",
                 ),
                 base_fingerprint=formal_baseline,
+                expected_draft_revision=step2_draft_baseline,
             ) from exc
 
         self._quality_probe(script_data, episode)
@@ -1340,6 +1359,7 @@ class ScriptGenerator:
         exc: DraftViolation,
         *,
         base_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
+        expected_draft_revision: str | None,
     ) -> DraftViolation:
         """把违约的 step2 产出与报告落待修复草稿，返回携带报告的违约异常（由调用方抛出）。
 
@@ -1350,6 +1370,13 @@ class ScriptGenerator:
         formal_path = self.project_path / "scripts" / episode_script_filename(episode)
         pm = ProjectManager(str(self.project_path.parent))
         with pm.file_lock(draft_path), pm.file_lock(formal_path):
+            current = read_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)
+            actual_draft_revision = draft_revision(current) if current is not None else None
+            if actual_draft_revision != expected_draft_revision:
+                return DraftViolation(
+                    "reference step2 草稿在模型生成期间已变化；本次生成结果未覆盖并发编辑，请先处置现有草稿",
+                    code="draft_revision_conflict",
+                )
             report = quarantine_and_report(
                 self.project_path,
                 episode,
@@ -1365,6 +1392,12 @@ class ScriptGenerator:
                 },
             )
         return DraftViolation(report, code="quarantined")
+
+    def _reference_step2_draft_revision(self, episode: int) -> str | None:
+        path = quarantine_path(self.project_path, episode, QUARANTINE_KIND_STEP2)
+        with ProjectManager(str(self.project_path.parent)).file_lock(path):
+            draft = read_quarantine(self.project_path, episode, QUARANTINE_KIND_STEP2)
+            return draft_revision(draft) if draft is not None else None
 
     async def promote_reference_step2_draft(
         self,

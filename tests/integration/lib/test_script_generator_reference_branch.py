@@ -887,6 +887,38 @@ async def test_step2_quarantine_transaction_does_not_block_event_loop(reference_
 
 
 @pytest.mark.asyncio
+async def test_step2_generation_preserves_draft_edited_during_model_call(reference_project: Path):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    generator = MagicMock()
+    generator.model = "mock"
+
+    async def generate(_request, **_kwargs):
+        started.set()
+        await release.wait()
+        return MagicMock(text=_step2_response(BAD_STEP2_UNIT_TEXT))
+
+    generator.generate = AsyncMock(side_effect=generate)
+    generation = asyncio.create_task(ScriptGenerator(reference_project, generator=generator).generate(episode=1))
+    await started.wait()
+    write_quarantine(
+        reference_project,
+        1,
+        QUARANTINE_KIND_STEP2,
+        content={"title": "并发草稿", "units": [{"text": "并发编辑内容"}]},
+        violations=[],
+    )
+    release.set()
+
+    with pytest.raises(DraftViolation) as excinfo:
+        await generation
+    assert excinfo.value.code == "draft_revision_conflict"
+    envelope = _json.loads(_step2_quarantine(reference_project).read_text(encoding="utf-8"))
+    assert envelope["content"]["title"] == "并发草稿"
+    assert envelope["content"]["units"][0]["text"] == "并发编辑内容"
+
+
+@pytest.mark.asyncio
 async def test_step2_preserves_output_when_formal_script_changes_during_generation(reference_project: Path):
     formal = await ScriptGenerator(reference_project, generator=_fake_step2_generator(STEP2_UNIT_TEXT)).generate(
         episode=1

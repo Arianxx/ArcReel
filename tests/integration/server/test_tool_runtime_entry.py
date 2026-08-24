@@ -95,6 +95,26 @@ async def test_entry_handlers_create_list_and_upload_a_readable_source(tmp_path:
     assert source_text.value.text == "第一章\n你好"
 
 
+async def test_list_projects_uses_readonly_loader(tmp_path: Path, monkeypatch) -> None:
+    services = _services(tmp_path)
+    services.projects.create_project("demo")
+    services.projects.create_project_metadata("demo", "Demo")
+
+    def mutating_loader(_name: str):
+        raise AssertionError("list_projects must not run migration writes")
+
+    monkeypatch.setattr(services.projects, "load_project", mutating_loader)
+
+    outcome = await list_projects(
+        ToolRequest(None),
+        CallerContext(user_id="test", source="mcp"),
+        services,
+    )
+
+    assert outcome.problem is None
+    assert outcome.value and outcome.value[0]["name"] == "demo"
+
+
 async def test_entry_handlers_return_typed_problems(tmp_path: Path) -> None:
     services = _services(tmp_path)
     caller = CallerContext(user_id="test", source="embedded")
