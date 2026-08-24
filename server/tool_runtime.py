@@ -522,7 +522,8 @@ async def list_source_files(
 ) -> ToolOutcome[SourceFilesContent]:
     try:
         project_dir = services.projects.get_project_path(scope.project_name)
-        files = [entry for entry in _business_file_entries(project_dir) if entry.path.startswith("source/")]
+        entries = await asyncio.to_thread(_business_file_entries, project_dir)
+        files = [entry for entry in entries if entry.path.startswith("source/")]
         revision = prefixed_canonical_json_digest([entry.model_dump() for entry in files])
         return ToolOutcome(value=SourceFilesContent(revision=revision, files=files))
     except Exception as exc:  # noqa: BLE001
@@ -539,7 +540,7 @@ async def get_source_text(
         project_dir = services.projects.get_project_path(scope.project_name)
         if not request.value.startswith("source/"):
             raise ValueError("path 必须指向 source/ 下的文本文件")
-        content, revision, etag, _size = _decode_business_file(project_dir, request.value)
+        content, revision, etag, _size = await asyncio.to_thread(_decode_business_file, project_dir, request.value)
         if not isinstance(content, str):
             raise ValueError("source 文件必须是文本")
         return ToolOutcome(value=SourceTextContent(revision=revision, etag=etag, path=request.value, text=content))
@@ -570,7 +571,7 @@ async def get_step1_content(
         for name in names:
             relative = f"drafts/episode_{episode}/{name}"
             try:
-                content, revision, etag, _size = _decode_business_file(project_dir, relative)
+                content, revision, etag, _size = await asyncio.to_thread(_decode_business_file, project_dir, relative)
             except FileNotFoundError:
                 continue
             return ToolOutcome(
@@ -594,7 +595,7 @@ async def list_project_files(
     services: Services,
 ) -> ToolOutcome[ProjectFilesContent]:
     try:
-        files = _business_file_entries(services.projects.get_project_path(scope.project_name))
+        files = await asyncio.to_thread(_business_file_entries, services.projects.get_project_path(scope.project_name))
         revision = prefixed_canonical_json_digest([entry.model_dump() for entry in files])
         return ToolOutcome(value=ProjectFilesContent(revision=revision, files=files))
     except Exception as exc:  # noqa: BLE001
@@ -609,7 +610,7 @@ async def read_project_file(
 ) -> ToolOutcome[ProjectFileContent]:
     try:
         project_dir = services.projects.get_project_path(scope.project_name)
-        content, revision, etag, _size = _decode_business_file(project_dir, request.value)
+        content, revision, etag, _size = await asyncio.to_thread(_decode_business_file, project_dir, request.value)
         return ToolOutcome(value=ProjectFileContent(revision=revision, etag=etag, path=request.value, content=content))
     except Exception as exc:  # noqa: BLE001
         return ToolOutcome(problem=_file_problem("read_project_file", exc))
@@ -791,6 +792,9 @@ async def upload_source(
     _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[dict[str, Any]]:
+    if problem := await migration_gate(scope, services):
+        return ToolOutcome(problem=problem)
+
     def _upload() -> dict[str, Any]:
         value = request.value
         if Path(value.filename).name != value.filename or "\\" in value.filename or value.filename.startswith("."):

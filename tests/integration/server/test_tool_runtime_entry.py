@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from lib.project_manager import ProjectManager
+from lib.project_migration_failure import MIGRATION_FAILURE_CODE, record_migration_failure
 from server.tool_runtime import (
     CallerContext,
     CreateProjectToolRequest,
@@ -14,6 +15,7 @@ from server.tool_runtime import (
     UploadSourceRequest,
     create_project,
     get_source_text,
+    list_project_files,
     list_projects,
     list_source_files,
     upload_source,
@@ -113,6 +115,7 @@ async def test_upload_source_rejects_unsafe_or_non_text_filenames(
 ) -> None:
     services = _services(tmp_path)
     services.projects.create_project("demo")
+    services.projects.create_project_metadata("demo", "Demo")
     caller = CallerContext(user_id="test", source="mcp")
 
     outcome = await upload_source(
@@ -129,6 +132,7 @@ async def test_upload_source_rejects_unsafe_or_non_text_filenames(
 async def test_upload_source_rejects_symlinked_source_directory(tmp_path: Path) -> None:
     services = _services(tmp_path)
     project_dir = services.projects.create_project("demo")
+    services.projects.create_project_metadata("demo", "Demo")
     source_dir = project_dir / "source"
     source_dir.rmdir()
     outside = tmp_path / "outside"
@@ -145,6 +149,47 @@ async def test_upload_source_rejects_symlinked_source_directory(tmp_path: Path) 
     assert outcome.problem is not None
     assert outcome.problem.code == "invalid_request"
     assert not (outside / "novel.txt").exists()
+
+
+async def test_upload_source_respects_migration_failure_gate(tmp_path: Path) -> None:
+    services = _services(tmp_path)
+    project_dir = services.projects.create_project("demo")
+    record_migration_failure(project_dir, ValueError("repair required"), schema_version=7)
+
+    outcome = await upload_source(
+        ToolRequest(UploadSourceRequest(filename="novel.txt", content="hello")),
+        ProjectScope(project_name="demo", projects_root=services.projects.projects_root),
+        CallerContext(user_id="test", source="mcp"),
+        services,
+    )
+
+    assert outcome.problem is not None
+    assert outcome.problem.code == MIGRATION_FAILURE_CODE
+    assert not (project_dir / "source" / "novel.txt").exists()
+
+
+@pytest.mark.parametrize("handler", [list_source_files, list_project_files])
+async def test_file_enumeration_runs_off_event_loop(tmp_path: Path, monkeypatch, handler) -> None:
+    from server import tool_runtime as mod
+
+    services = _services(tmp_path)
+    services.projects.create_project("demo")
+    offloaded: list[str] = []
+
+    async def run_in_thread(function, /, *args, **kwargs):
+        offloaded.append(function.__name__)
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(mod.asyncio, "to_thread", run_in_thread)
+    outcome = await handler(
+        ToolRequest(None),
+        ProjectScope(project_name="demo", projects_root=services.projects.projects_root),
+        CallerContext(user_id="test", source="mcp"),
+        services,
+    )
+
+    assert outcome.problem is None
+    assert offloaded == ["_business_file_entries"]
 
 
 def test_create_project_request_rejects_mode_specific_fields_before_writing(tmp_path: Path) -> None:

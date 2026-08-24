@@ -741,6 +741,61 @@ async def test_normalize_drama_script_serializes_commit_with_draft_edits(fake_ct
     assert out.get("is_error") is not True, out
 
 
+async def test_normalize_drama_script_preserves_draft_edited_during_model_call(
+    fake_ctx: ToolContext, monkeypatch
+) -> None:
+    from server import text_generation as mod
+
+    _drama_project(fake_ctx)
+    _write_drama_step1(fake_ctx, [_drama_scene()])
+    opened_out = await _open_drama_for_edit(fake_ctx, source="source/episode_1.txt")
+    opened = json.loads(opened_out["content"][0]["text"])["draft"]
+    started = asyncio.Event()
+    release = asyncio.Event()
+    regenerated = {"title": "第一集", "scenes": [_drama_scene(scene_description="重生成内容")]}
+
+    class _Generator:
+        async def generate(self, _request, project_name=None):
+            started.set()
+            await release.wait()
+
+            class _R:
+                text = json.dumps(regenerated, ensure_ascii=False)
+
+            return _R()
+
+    async def fake_create(_task_type, project_name=None):
+        return _Generator()
+
+    _use_fake_caps(fake_ctx)
+    monkeypatch.setattr(mod.TextGenerator, "create", fake_create)
+    generation = asyncio.create_task(
+        _call(normalize_drama_script_tool(fake_ctx), {"episode": 1, "source": "source/episode_1.txt"})
+    )
+    await started.wait()
+    edited = copy.deepcopy(opened["content"])
+    edited["scenes"][0]["scene_description"] = "并发编辑内容"
+    patched = await _call(
+        patch_draft_tool(fake_ctx),
+        {
+            "episode": 1,
+            "doc_type": "drama_step1",
+            "content": edited,
+            "base_revision": opened["revision"],
+        },
+    )
+    assert patched.get("is_error") is not True, patched
+    release.set()
+
+    out = await generation
+
+    assert out.get("is_error") is True
+    assert "draft_revision_conflict" in out["content"][0]["text"]
+    assert _read_drama_quarantine(fake_ctx)["content"]["scenes"][0]["scene_description"] == "并发编辑内容"
+    formal = json.loads(_drama_step1_path(fake_ctx).read_text(encoding="utf-8"))
+    assert formal["scenes"][0]["scene_description"] != "重生成内容"
+
+
 # ---------------------------------------------------------------------------
 # narration step1 的取回编辑与晋升闭环
 # ---------------------------------------------------------------------------

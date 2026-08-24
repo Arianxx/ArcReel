@@ -18,6 +18,7 @@ from lib.artifact_manifest import ArtifactBasis
 from lib.artifact_provenance import Step1PromptVariant, build_step1_request
 from lib.asset_types import BUCKET_KEY, asset_name_comparison_key, normalize_asset_bucket
 from lib.config.resolver import ConfigResolver
+from lib.content_digest import prefixed_sha256_file
 from lib.custom_provider.duration_presets import DEFAULT_FALLBACK
 from lib.db import async_session_factory
 from lib.draft_quarantine import (
@@ -98,6 +99,21 @@ class TextGenerationResult:
 
 class TextGenerationError(Exception):
     """Expected refusal from a text-generation handler."""
+
+
+def _draft_file_revision(path: Path) -> str | None:
+    try:
+        return prefixed_sha256_file(path)
+    except FileNotFoundError:
+        return None
+
+
+def _assert_draft_revision(path: Path, expected: str | None) -> None:
+    actual = _draft_file_revision(path)
+    if actual != expected:
+        raise TextGenerationError(
+            f"draft_revision_conflict: draft changed during generation; expected {expected}, actual {actual}"
+        )
 
 
 def _instructions(value: Any) -> str | None:
@@ -444,6 +460,9 @@ async def generate_drama_step1(
                 f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}\n\nPrompt 长度: {len(prompt)} 字符"
             )
 
+        draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_DRAMA_STEP1)
+        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            draft_baseline = _draft_file_revision(draft_path)
         schema = build_drama_normalized_script_model(supported_durations)
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_name)
         result = await generator.generate(
@@ -466,8 +485,8 @@ async def generate_drama_step1(
                 scene["needs_replan"] = True
 
         step1_path = episode_drafts_dir(project_path, episode) / STEP1_FILENAMES["drama"]
-        draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_DRAMA_STEP1)
         with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            _assert_draft_revision(draft_path, draft_baseline)
             with script_review.formal_step1_lock(project_path, episode, step1_path):
                 script_review.write_formal_step1_locked(project_path, episode, step1_path, content, basis=step1_basis)
                 clear_quarantine(project_path, episode, QUARANTINE_KIND_DRAMA_STEP1)
@@ -970,6 +989,9 @@ async def generate_reference_step1(
                 f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}\n\nPrompt 长度: {len(prompt)} 字符"
             )
 
+        draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_STEP1)
+        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            draft_baseline = _draft_file_revision(draft_path)
         schema = build_reference_units_step1_model(split_caps.durations)
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_name)
         result = await generator.generate(
@@ -994,8 +1016,8 @@ async def generate_reference_step1(
             source_language=project.get("source_language"),
         )
         if violations:
-            draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_STEP1)
             with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+                _assert_draft_revision(draft_path, draft_baseline)
                 with script_review.step1_write_lock(project_path, episode) as step1_path:
                     report = quarantine_and_report(
                         project_path,
@@ -1016,8 +1038,8 @@ async def generate_reference_step1(
             episode=episode,
             max_refs=split_caps.max_refs,
         )
-        draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_STEP1)
         with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            _assert_draft_revision(draft_path, draft_baseline)
             with script_review.step1_write_lock(project_path, episode) as step1_path:
                 script_review.write_step1_locked(project_path, episode, {"units": raw_units}, basis=step1_basis)
                 clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
@@ -1083,6 +1105,9 @@ async def generate_narration_step1(
                 f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}\n\nPrompt 长度: {len(prompt)} 字符"
             )
 
+        draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
+        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            draft_baseline = _draft_file_revision(draft_path)
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_name)
         result = await generator.generate(
             BackendTextGenerationRequest(
@@ -1113,8 +1138,8 @@ async def generate_narration_step1(
         )
         step1_path = _narration_step1_path(project_path, episode)
         if violations:
-            draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
             with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+                _assert_draft_revision(draft_path, draft_baseline)
                 with script_review.formal_step1_lock(project_path, episode, step1_path):
                     report = quarantine_and_report(
                         project_path,
@@ -1129,8 +1154,8 @@ async def generate_narration_step1(
                     )
             raise TextGenerationError(report)
 
-        draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
         with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            _assert_draft_revision(draft_path, draft_baseline)
             with script_review.formal_step1_lock(project_path, episode, step1_path):
                 script_review.write_formal_step1_locked(
                     project_path,
