@@ -85,6 +85,7 @@ from lib.source_revision import SourceScope
 from lib.workflow_plan import WorkflowPlan, WorkflowPlanRequest
 from lib.workflow_state import WorkflowRequestError
 from server.draft_workflow import (
+    DiscardDraftRequest,
     DraftContext,
     DraftLocator,
     DraftWorkflow,
@@ -676,13 +677,15 @@ async def promote_draft(
 
 
 async def discard_draft(
-    request: ToolRequest[DraftLocator],
+    request: ToolRequest[DiscardDraftRequest],
     scope: ProjectScope,
     _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[dict[str, Any]]:
-    locator = request.value
-    return await _run_draft(_draft_workflow(scope, services).discard(locator.episode, locator.doc_type))
+    discard = request.value
+    return await _run_draft(
+        _draft_workflow(scope, services).discard(discard.episode, discard.doc_type, discard.base_revision)
+    )
 
 
 class CreateProjectToolRequest(BaseModel):
@@ -1804,6 +1807,7 @@ __all__ = [
     "SourceTextContent",
     "Step1Content",
     "DraftLocator",
+    "DiscardDraftRequest",
     "PatchDraftRequest",
     "ProjectScope",
     "RenameAssetRequest",

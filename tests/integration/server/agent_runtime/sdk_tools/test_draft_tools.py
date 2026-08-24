@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 
 import pytest
@@ -435,7 +436,9 @@ async def test_each_doc_type_completes_multi_patch_then_promote_or_discard(
     assert second["revision"] != first["revision"]
 
     if doc_type == "reference_step2":
-        discarded = _draft_result(await _call(discard_draft_tool(fake_ctx), args))
+        discarded = _draft_result(
+            await _call(discard_draft_tool(fake_ctx), {**args, "base_revision": second["revision"]})
+        )
         assert discarded["discarded"] is True
     else:
         if doc_type == "drama_step1":
@@ -473,13 +476,68 @@ async def test_patch_draft_can_accept_a_merged_formal_revision(fake_ctx: ToolCon
     assert promoted.get("is_error") is not True, promoted
 
 
+async def test_patch_draft_revision_covers_source_metadata(fake_ctx: ToolContext) -> None:
+    _rv_source(fake_ctx)
+    (fake_ctx.project_path / "source" / "episode_2.txt").write_text(_RV_NOVEL, encoding="utf-8")
+    _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
+    opened = _draft_result(await _open_for_edit(fake_ctx, source="source/episode_1.txt"))
+    args = {
+        "episode": 1,
+        "doc_type": "reference_step1",
+        "content": opened["content"],
+        "base_revision": opened["revision"],
+    }
+
+    first = _draft_result(await _call(patch_draft_tool(fake_ctx), {**args, "source": "source/episode_2.txt"}))
+    stale = await _call(patch_draft_tool(fake_ctx), {**args, "source": "source/episode_1.txt"})
+
+    assert first["revision"] != opened["revision"]
+    assert stale.get("is_error") is True
+    assert "revision_conflict" in stale["content"][0]["text"]
+
+
+async def test_discard_draft_rejects_stale_revision(fake_ctx: ToolContext) -> None:
+    _rv_source(fake_ctx)
+    _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
+    opened = _draft_result(await _open_for_edit(fake_ctx))
+    changed = copy.deepcopy(opened["content"])
+    changed["units"][0]["text"] = "@[张三] 走向 @[村口]"
+    patched = _draft_result(
+        await _call(
+            patch_draft_tool(fake_ctx),
+            {
+                "episode": 1,
+                "doc_type": "reference_step1",
+                "content": changed,
+                "base_revision": opened["revision"],
+            },
+        )
+    )
+
+    stale = await _call(
+        discard_draft_tool(fake_ctx),
+        {"episode": 1, "doc_type": "reference_step1", "base_revision": opened["revision"]},
+    )
+
+    assert stale.get("is_error") is True
+    assert "revision_conflict" in stale["content"][0]["text"]
+    assert _rv_quarantine_path(fake_ctx).exists()
+    discarded = _draft_result(
+        await _call(
+            discard_draft_tool(fake_ctx),
+            {"episode": 1, "doc_type": "reference_step1", "base_revision": patched["revision"]},
+        )
+    )
+    assert discarded["discarded"] is True
+
+
 async def test_discard_draft_keeps_formal_content_and_is_idempotent(fake_ctx: ToolContext) -> None:
     _rv_source(fake_ctx)
     _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
     formal_before = _rv_step1_path(fake_ctx).read_text(encoding="utf-8")
-    await _open_for_edit(fake_ctx)
+    opened = _draft_result(await _open_for_edit(fake_ctx))
 
-    args = {"episode": 1, "doc_type": "reference_step1"}
+    args = {"episode": 1, "doc_type": "reference_step1", "base_revision": opened["revision"]}
     first = _draft_result(await _call(discard_draft_tool(fake_ctx), args))
     second = _draft_result(await _call(discard_draft_tool(fake_ctx), args))
 

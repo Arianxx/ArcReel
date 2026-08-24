@@ -15,7 +15,7 @@ from server.agent_runtime.sdk_tools._context import (
     tool_outcome_response,
     tool_services,
 )
-from server.draft_workflow import DraftLocator, PatchDraftRequest
+from server.draft_workflow import DiscardDraftRequest, DraftLocator, PatchDraftRequest
 from server.text_generation import TextGenerationRequest as ToolTextGenerationRequest
 from server.tool_runtime import (
     ToolOutcome,
@@ -216,11 +216,24 @@ def patch_draft_tool(ctx: ToolContext):
 
 
 def discard_draft_tool(ctx: ToolContext):
-    @tool("discard_draft", "丢弃指定草稿；正式文档保持不变。重复调用安全。", _DRAFT_LOCATOR_SCHEMA)
+    schema = {
+        **_DRAFT_LOCATOR_SCHEMA,
+        "properties": {
+            **_DRAFT_LOCATOR_SCHEMA["properties"],
+            "base_revision": {"type": "string", "description": "open_draft / 上次 patch_draft 返回的 revision"},
+        },
+        "required": ["episode", "doc_type", "base_revision"],
+    }
+
+    @tool("discard_draft", "按 canonical revision 丢弃指定草稿；正式文档保持不变。", schema)
     async def _handler(args: dict[str, Any]) -> dict[str, Any]:
         try:
-            locator = DraftLocator(episode=int(args["episode"]), doc_type=str(args["doc_type"]))
-            outcome = await discard_draft(ToolRequest(locator), ctx.scope, ctx.caller, tool_services(ctx))
+            request = DiscardDraftRequest(
+                episode=int(args["episode"]),
+                doc_type=str(args["doc_type"]),
+                base_revision=str(args["base_revision"]),
+            )
+            outcome = await discard_draft(ToolRequest(request), ctx.scope, ctx.caller, tool_services(ctx))
         except Exception as exc:  # noqa: BLE001
             outcome = ToolOutcome(problem=ToolProblem("invalid_request", str(exc)))
         return _draft_response(outcome)

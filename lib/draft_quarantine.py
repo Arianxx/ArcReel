@@ -119,9 +119,17 @@ class QuarantinedDraft:
     path: Path
 
 
-def draft_revision(content: object) -> str:
-    """Return the canonical optimistic-concurrency token for draft content."""
-    return prefixed_canonical_json_digest(content)
+def draft_revision(draft: QuarantinedDraft) -> str:
+    """Return the canonical optimistic-concurrency token for persisted draft state."""
+    return prefixed_canonical_json_digest(
+        {
+            "kind": draft.kind,
+            "episode": draft.episode,
+            "meta": draft.meta,
+            "violations": draft.violations,
+            "content": draft.content,
+        }
+    )
 
 
 def draft_payload(draft: QuarantinedDraft) -> dict[str, Any]:
@@ -131,7 +139,7 @@ def draft_payload(draft: QuarantinedDraft) -> dict[str, Any]:
         "doc_type": QUARANTINE_KIND_TO_DOC_TYPE[draft.kind],
         "content": draft.content,
         "violations": draft.violations,
-        "revision": draft_revision(draft.content),
+        "revision": draft_revision(draft),
     }
 
 

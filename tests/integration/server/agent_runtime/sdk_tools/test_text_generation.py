@@ -119,7 +119,7 @@ async def test_get_video_capabilities_error(fake_ctx: ToolContext) -> None:
 
 @pytest.mark.parametrize("content_mode", ["ad", "unsupported"])
 async def test_generate_step1_rejects_inapplicable_content_modes(fake_ctx: ToolContext, content_mode: str) -> None:
-    fake_ctx.pm.project_payload["content_mode"] = content_mode  # pyright: ignore[reportAttributeAccessIssue]
+    fake_ctx.pm.project_payload["content_mode"] = content_mode
     resolver = _use_fake_caps(fake_ctx)
 
     out = await _call(generate_step1_tool(fake_ctx), {"episode": 1, "dry_run": True})

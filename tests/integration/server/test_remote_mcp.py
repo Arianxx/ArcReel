@@ -236,6 +236,7 @@ async def test_remote_mcp_returns_typed_workflow_plan_and_rejects_bad_project(re
     assert all(
         "project" in listed[name].inputSchema["required"] for name in migrated | readers | drafts | text_and_script
     )
+    assert "base_revision" in listed["discard_draft"].inputSchema["required"]
     assert result.structuredContent is not None
     assert result.structuredContent["workflow_plan"]["status"]["target"]["episode"] == 1
     assert capabilities.structuredContent == {
@@ -331,7 +332,9 @@ async def test_remote_mcp_draft_supports_multiple_patches_and_discard(remote_ser
                             "base_revision": first.structuredContent["draft"]["revision"],
                         },
                     )
-                    discarded = await session.call_tool("discard_draft", args)
+                    discarded = await session.call_tool(
+                        "discard_draft", {**args, "base_revision": second.structuredContent["draft"]["revision"]}
+                    )
                     reopened = await session.call_tool("open_draft", args)
                     promoted = await session.call_tool("promote_draft", args)
 
@@ -461,7 +464,13 @@ async def test_remote_mcp_draft_respects_migration_failure_gate(remote_server, r
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     result = await session.call_tool(
-                        "discard_draft", {"project": "demo", "episode": 1, "doc_type": "drama_step1"}
+                        "discard_draft",
+                        {
+                            "project": "demo",
+                            "episode": 1,
+                            "doc_type": "drama_step1",
+                            "base_revision": "sha256-v1:" + "0" * 64,
+                        },
                     )
 
     assert result.isError

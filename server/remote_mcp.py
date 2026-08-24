@@ -25,7 +25,7 @@ from lib.project_manager import ProjectManager, get_project_manager
 from lib.source_revision import SourceScope
 from lib.workflow_plan import NarrationDelivery, WorkflowPlanRequest
 from server.auth import API_KEY_PREFIX, _verify_api_key
-from server.draft_workflow import DraftLocator, PatchDraftRequest
+from server.draft_workflow import DiscardDraftRequest, DraftLocator, PatchDraftRequest
 from server.services import workflow_planner
 from server.text_generation import TextGenerationRequest
 from server.tool_runtime import (
@@ -293,11 +293,13 @@ def build_remote_mcp_server(
         return _to_mcp_result("draft", await promote_draft(ToolRequest(request), scope, caller, services))
 
     @server.tool(name="discard_draft", structured_output=False)
-    async def remote_discard_draft(project: str, episode: int, doc_type: DraftDocType) -> CallToolResult:
+    async def remote_discard_draft(
+        project: str, episode: int, doc_type: DraftDocType, base_revision: str
+    ) -> CallToolResult:
         """Discard one editing draft without changing its formal document."""
         try:
             scope = _project_scope(project, projects)
-            request = DraftLocator(episode=episode, doc_type=doc_type)
+            request = DiscardDraftRequest(episode=episode, doc_type=doc_type, base_revision=base_revision)
         except (FileNotFoundError, ValueError) as exc:
             return _to_mcp_result("draft", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
         if problem := await migration_gate(scope, services):

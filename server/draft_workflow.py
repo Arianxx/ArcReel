@@ -92,6 +92,13 @@ class PatchDraftRequest:
     updates_source: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class DiscardDraftRequest:
+    episode: int
+    doc_type: str
+    base_revision: str
+
+
 class DraftWorkflowError(Exception):
     def __init__(self, code: str, detail: str):
         super().__init__(detail)
@@ -999,7 +1006,7 @@ class DraftWorkflow:
             draft = read_quarantine(self.ctx.project_path, episode, resolved)
             if draft is None:
                 return self._read(episode, resolved)
-            actual_revision = draft_revision(draft.content)
+            actual_revision = draft_revision(draft)
             if base_revision != actual_revision:
                 raise DraftWorkflowError(
                     "revision_conflict",
@@ -1076,10 +1083,18 @@ class DraftWorkflow:
             value["path"] = str(result_path)
         return value
 
-    async def discard(self, episode: int, doc_type: str) -> dict[str, Any]:
+    async def discard(self, episode: int, doc_type: str, base_revision: str) -> dict[str, Any]:
         resolved = self._kind(episode, doc_type, allow_stale_discard=True)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
         with ProjectManager(str(self.ctx.projects_root)).file_lock(path):
+            draft = read_quarantine(self.ctx.project_path, episode, resolved)
+            if draft is not None:
+                actual_revision = draft_revision(draft)
+                if base_revision != actual_revision:
+                    raise DraftWorkflowError(
+                        "revision_conflict",
+                        f"draft revision changed: expected {base_revision}, actual {actual_revision}",
+                    )
             discarded = path.exists()
             path.unlink(missing_ok=True)
         return {"episode": episode, "doc_type": doc_type, "discarded": discarded}
