@@ -703,6 +703,33 @@ async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
     assert out.get("is_error") is not True, out
 
 
+async def test_open_step1_draft_waits_for_quarantine_lock(fake_ctx: ToolContext, monkeypatch) -> None:
+    _drama_project(fake_ctx)
+    _write_drama_step1(fake_ctx, [_drama_scene()])
+    target = _drama_quarantine_path(fake_ctx)
+    pm = ProjectManager(str(fake_ctx.project_path.parent))
+    attempted = asyncio.Event()
+    original_async_lock = ProjectManager.async_file_lock
+
+    async with pm.async_file_lock(target):
+
+        @asynccontextmanager
+        async def observed_async_lock(self, path, **kwargs):
+            if path == target:
+                attempted.set()
+            async with original_async_lock(self, path, **kwargs):
+                yield
+
+        monkeypatch.setattr(ProjectManager, "async_file_lock", observed_async_lock)
+        opening = asyncio.create_task(_open_drama_for_edit(fake_ctx, source="source/episode_1.txt"))
+        await asyncio.wait_for(attempted.wait(), timeout=1)
+        assert not opening.done()
+
+    out = await opening
+    assert out.get("is_error") is not True, out
+    assert target.exists()
+
+
 async def test_promote_draft_refuses_after_mode_switch(fake_ctx: ToolContext) -> None:
     """切走参考路径后不再晋升残留草稿：晋升会按参考路径的形状覆盖该集正式剧本。"""
     _rv_project(fake_ctx, generation_mode="storyboard")

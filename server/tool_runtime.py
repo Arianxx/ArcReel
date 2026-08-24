@@ -817,16 +817,20 @@ async def upload_source(
             raise UnsupportedFormatError(ext=suffix)
         if not services.projects.project_exists(scope.project_name):
             raise FileNotFoundError(f"项目 '{scope.project_name}' 缺少 project.json")
-        with tempfile.NamedTemporaryFile(suffix=Path(value.filename).suffix) as source:
+        with tempfile.NamedTemporaryFile(suffix=Path(value.filename).suffix, delete=False) as source:
+            source_path = Path(source.name)
             source.write(value.content.encode("utf-8"))
             source.flush()
+        try:
             with services.projects.locked_source_mutation(scope.project_name) as source_dir:
                 result = SourceLoader.load(
-                    Path(source.name),
+                    source_path,
                     source_dir,
                     original_filename=value.filename,
                     on_conflict=value.on_conflict,
                 )
+        finally:
+            source_path.unlink(missing_ok=True)
         return {
             "filename": result.normalized_path.name,
             "path": f"source/{result.normalized_path.name}",

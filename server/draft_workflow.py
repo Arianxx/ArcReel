@@ -1012,19 +1012,14 @@ class DraftWorkflow:
 
     async def open(self, episode: int, doc_type: str, source: str | None = None) -> dict[str, Any]:
         resolved = self._kind(episode, doc_type)
-        existing = read_quarantine(self.ctx.project_path, episode, resolved)
-        if existing is not None:
-            return self._read(episode, resolved)
-        if quarantine_exists(self.ctx.project_path, episode, resolved):
-            return self._read(episode, resolved)
+        path = quarantine_path(self.ctx.project_path, episode, resolved)
 
         try:
-            if resolved == QUARANTINE_KIND_STEP2:
-                path = quarantine_path(self.ctx.project_path, episode, resolved)
-                async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
-                    existing = read_quarantine(self.ctx.project_path, episode, resolved)
-                    if existing is not None:
-                        return self._read(episode, resolved)
+            async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
+                existing = read_quarantine(self.ctx.project_path, episode, resolved)
+                if existing is not None or quarantine_exists(self.ctx.project_path, episode, resolved):
+                    return self._read(episode, resolved)
+                if resolved == QUARANTINE_KIND_STEP2:
                     script = self.ctx.pm.load_script(self.ctx.project_name, episode_script_filename(episode))
                     units = script.get("video_units")
                     if not isinstance(units, list) or not units:
@@ -1041,13 +1036,13 @@ class DraftWorkflow:
                         violations=[],
                         meta={"base_fingerprint": script_review.content_fingerprint_of_data(script)},
                     )
-            else:
-                await _STEP1_EDIT_OPENERS[resolved](self.ctx, episode, source)
+                else:
+                    await _STEP1_EDIT_OPENERS[resolved](self.ctx, episode, source)
+                return self._read(episode, resolved)
         except DraftWorkflowError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise DraftWorkflowError("draft_open_failed", str(exc)) from exc
-        return self._read(episode, resolved)
 
     async def patch(
         self,
