@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from lib import script_review
 from lib.draft_quarantine import (
     QUARANTINE_KIND_NARRATION_STEP1,
     QUARANTINE_KIND_STEP1,
@@ -134,6 +135,34 @@ async def test_split_reference_video_units_reports_all_bad_units_in_one_round(
     assert [v["code"] for v in envelope["violations"]] == ["unregistered_asset", "braces_in_description"]
     # 合法的 unit 也原样留在草稿里：Agent 只需改坏的那些
     assert len(envelope["content"]["units"]) == 3
+
+
+async def test_reference_step1_write_transaction_does_not_block_event_loop(fake_ctx: ToolContext, monkeypatch) -> None:
+    _rv_source(fake_ctx)
+    started = threading.Event()
+    release = threading.Event()
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    original_write = script_review.write_step1
+
+    def blocked_write(*args, **kwargs):
+        worker_threads.append(threading.get_ident())
+        started.set()
+        assert release.wait(timeout=2)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(script_review, "write_step1", blocked_write)
+    generation = asyncio.create_task(_run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[张三] 起身")]))
+    assert await asyncio.to_thread(started.wait, 1)
+    ticked = asyncio.Event()
+    asyncio.get_running_loop().call_soon(ticked.set)
+    await asyncio.wait_for(ticked.wait(), timeout=1)
+    release.set()
+
+    out = await generation
+
+    assert out.get("is_error") is not True, out
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 
 async def test_promote_draft_promotes_after_repair(fake_ctx: ToolContext, monkeypatch) -> None:

@@ -416,6 +416,27 @@ def write_step1_locked(
     )
 
 
+def write_step1(
+    project_path: Path,
+    episode: int,
+    content: dict[str, Any],
+    *,
+    expected_fingerprint: str | None | _UncheckedFingerprint = UNCHECKED_FINGERPRINT,
+    clear_step2_quarantine: bool = True,
+    basis: ArtifactBasis | None = None,
+) -> bool:
+    """Run the complete reference step1 write transaction under its synchronous locks."""
+    with step1_write_lock(project_path, episode):
+        return write_step1_locked(
+            project_path,
+            episode,
+            content,
+            expected_fingerprint=expected_fingerprint,
+            clear_step2_quarantine=clear_step2_quarantine,
+            basis=basis,
+        )
+
+
 def stored_review(project: dict[str, Any], episode: int) -> dict[str, Any]:
     """该集已存的确认记录（``episodes[i].step1_review``），缺失或形状坏时返回空 dict。"""
     ep = find_episode(project, episode)

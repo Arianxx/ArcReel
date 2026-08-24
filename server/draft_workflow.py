@@ -266,18 +266,17 @@ async def _promote_reference_step1(ctx: DraftContext, episode: int, draft: Quara
         draft.meta["base_fingerprint"] if "base_fingerprint" in draft.meta else script_review.UNCHECKED_FINGERPRINT
     )
     try:
-        with script_review.step1_write_lock(project_path, episode):
-            script_review.write_step1_locked(
-                project_path,
-                episode,
-                {"units": units},
-                expected_fingerprint=expected,
-                basis=revalidation.basis,
-            )
-            # 落盘成功后才清草稿：写盘失败（含冲突）时草稿还在，改完重试晋升即可，不会两头皆空。
-            # 清理与写盘同一临界区：并发的取回请求不会在两步之间看到「正式文件已是新内容、
-            # 草稿却还在场」的中间态。
-            clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
+        await asyncio.to_thread(
+            script_review.write_step1,
+            project_path,
+            episode,
+            {"units": units},
+            expected_fingerprint=expected,
+            basis=revalidation.basis,
+        )
+        # 落盘成功后才清草稿：写盘失败（含冲突）时草稿还在，改完重试晋升即可，不会两头皆空。
+        # 调用方持有草稿锁，正式写入到清理之间没有其它草稿操作可以插队。
+        clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
     except script_review.Step1WriteConflict as conflict:
         raise DraftWorkflowError(
             "formal_revision_conflict",

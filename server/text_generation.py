@@ -1096,15 +1096,15 @@ async def generate_reference_step1(
         async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             _assert_draft_revision(draft_path, draft_baseline)
             try:
-                with script_review.step1_write_lock(project_path, episode) as step1_path:
-                    script_review.write_step1_locked(
-                        project_path,
-                        episode,
-                        {"units": raw_units},
-                        expected_fingerprint=formal_baseline,
-                        basis=step1_basis,
-                    )
-                    clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
+                await asyncio.to_thread(
+                    script_review.write_step1,
+                    project_path,
+                    episode,
+                    {"units": raw_units},
+                    expected_fingerprint=formal_baseline,
+                    basis=step1_basis,
+                )
+                clear_quarantine(project_path, episode, QUARANTINE_KIND_STEP1)
             except script_review.Step1WriteConflict as exc:
                 raise TextGenerationError(
                     _quarantine_formal_generation_conflict(
@@ -1122,7 +1122,14 @@ async def generate_reference_step1(
             project,
             split_caps.voice,
         )
-        return TextGenerationResult(_reference_result_text(step1_path, raw_units, warning_lines, action="拆分"))
+        return TextGenerationResult(
+            _reference_result_text(
+                script_review.official_reference_step1_path(project_path, episode),
+                raw_units,
+                warning_lines,
+                action="拆分",
+            )
+        )
     except TextGenerationError:
         raise
     except Exception as exc:
