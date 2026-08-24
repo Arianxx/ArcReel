@@ -354,12 +354,14 @@ async def test_split_violation_quarantine_records_base_fingerprint(fake_ctx: Too
     envelope = _read_rv_quarantine(fake_ctx)
     envelope["content"]["units"][0]["text"] = "@[张三] 出场"
     _rv_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+    formal_fingerprint = script_review.content_fingerprint(_rv_step1_path(fake_ctx))
 
     out = await _promote(fake_ctx)
 
     assert out.get("is_error") is True
     assert "并发冲突" in out["content"][0]["text"]
     assert "base_revision" in out["content"][0]["text"]
+    assert script_review.content_fingerprint(_rv_step1_path(fake_ctx)) == formal_fingerprint
 
 
 async def test_split_violation_keeps_pre_generation_formal_baseline(fake_ctx: ToolContext, monkeypatch) -> None:
@@ -394,7 +396,12 @@ async def test_split_violation_keeps_pre_generation_formal_baseline(fake_ctx: To
             config_resolver=resolver,
         )
     )
-    await started.wait()
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+    except TimeoutError:
+        generation.cancel()
+        await asyncio.gather(generation, return_exceptions=True)
+        raise
     _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 在 @[村口] 等候")])
     release.set()
 
@@ -733,18 +740,15 @@ async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
             return self.project_path / "scripts" / f"episode_{episode}.json"
 
     monkeypatch.setattr(mod, "ScriptGenerator", _FakeGenerator)
-    safety_release = threading.Timer(1, release.set)
-    safety_release.start()
     promotion = asyncio.create_task(_promote(fake_ctx))
     try:
         await asyncio.wait_for(attempted.wait(), 0.3)
         assert not promotion.done()
     finally:
         release.set()
-        safety_release.cancel()
 
     assert await holder is None
-    out = await promotion
+    out = await asyncio.wait_for(promotion, timeout=1)
     assert out.get("is_error") is not True, out
 
 

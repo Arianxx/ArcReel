@@ -403,7 +403,7 @@ async def test_remote_mcp_text_generation_and_script_patch_return_structured_con
     assert confirmed.structuredContent["text_generation"]["message"]
     assert not script.isError
     assert "DRY RUN" in script.structuredContent["text_generation"]["message"]
-    assert not patched.isError
+    assert patched.isError
     assert patched.structuredContent["script_patch"]["problems"][0]["code"] == "revision_conflict"
 
 

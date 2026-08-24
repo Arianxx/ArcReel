@@ -22,6 +22,7 @@ from lib.config.resolver import ConfigResolver
 from lib.db import async_session_factory
 from lib.db.base import DEFAULT_USER_ID
 from lib.project_manager import ProjectManager, get_project_manager
+from lib.script_batch_edit import ScriptBatchEditResult
 from lib.source_revision import SourceScope
 from lib.workflow_plan import NarrationDelivery, WorkflowPlanRequest
 from server.auth import API_KEY_PREFIX, _verify_api_key
@@ -129,6 +130,7 @@ def _to_mcp_result(domain_key: str, outcome: ToolOutcome[Any]) -> CallToolResult
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(structured, ensure_ascii=False))],
         structuredContent=structured,
+        isError=isinstance(value, ScriptBatchEditResult) and not value.success,
     )
 
 
