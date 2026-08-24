@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import os
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -180,7 +181,7 @@ def test_text_generation_dependency_points_from_host_adapters_to_shared_handler(
     assert '"is_error"' not in shared_path.read_text(encoding="utf-8")
 
 
-async def test_patch_episode_meta_returns_typed_domain_outcome(tmp_path: Path) -> None:
+async def test_patch_episode_meta_returns_typed_domain_outcome(tmp_path: Path, monkeypatch) -> None:
     from lib.project_manager import ProjectManager
 
     projects = ProjectManager(tmp_path / "projects")
@@ -188,6 +189,17 @@ async def test_patch_episode_meta_returns_typed_domain_outcome(tmp_path: Path) -
     projects.create_project_metadata("demo", "Demo", "", "narration")
     projects.save_script("demo", {"title": "旧标题", "segments": []}, "episode_1.json", validate=False)
     services = Services(projects=projects, workflow_planner=_Planner(_status()), capabilities=_Capabilities())
+    caller_thread = threading.get_ident()
+    mutation_threads: list[int] = []
+    original_locked_script = projects.locked_script
+
+    @contextmanager
+    def tracked_locked_script(project_name: str, filename: str):
+        mutation_threads.append(threading.get_ident())
+        with original_locked_script(project_name, filename) as script:
+            yield script
+
+    monkeypatch.setattr(projects, "locked_script", tracked_locked_script)
 
     outcome = await patch_episode_meta(
         ToolRequest(PatchEpisodeMetaRequest(script="episode_1.json", field="title", value=" 新标题 ")),
@@ -205,6 +217,8 @@ async def test_patch_episode_meta_returns_typed_domain_outcome(tmp_path: Path) -
         "value": "新标题",
     }
     assert projects.load_script("demo", "episode_1.json")["title"] == "新标题"
+    assert mutation_threads
+    assert all(thread != caller_thread for thread in mutation_threads)
 
 
 async def test_content_readers_return_body_and_revision_from_the_same_snapshot(tmp_path: Path, monkeypatch) -> None:

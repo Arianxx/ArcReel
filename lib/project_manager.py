@@ -1905,7 +1905,7 @@ class ProjectManager:
                 try:
                     portalocker.lock(handle, portalocker.LOCK_EX | portalocker.LOCK_NB)
                     acquired = True
-                except (portalocker.AlreadyLocked, portalocker.LockException):
+                except portalocker.AlreadyLocked:
                     if asyncio.get_running_loop().time() >= deadline:
                         raise TimeoutError(f"acquiring lock timed out after {timeout}s: {lock_path}")
                     await asyncio.sleep(0.05)

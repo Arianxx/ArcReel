@@ -128,6 +128,18 @@ class TestSaveScriptConcurrency:
         async with pm.async_file_lock(path, timeout=0.1):
             pass
 
+    async def test_async_file_lock_propagates_non_contention_errors(self, tmp_path: Path, monkeypatch) -> None:
+        pm = ProjectManager(tmp_path)
+
+        def fail_lock(*_args, **_kwargs) -> None:
+            raise project_manager_module.portalocker.LockException("lock backend failed")
+
+        monkeypatch.setattr(project_manager_module.portalocker, "lock", fail_lock)
+
+        with pytest.raises(project_manager_module.portalocker.LockException, match="lock backend failed"):
+            async with pm.async_file_lock(tmp_path / "draft.json", timeout=0):
+                pass
+
     def test_save_script_rejects_stale_expected_fingerprint(self, tmp_path: Path) -> None:
         pm = ProjectManager(tmp_path)
         name = "proj-occ"

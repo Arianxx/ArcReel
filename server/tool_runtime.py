@@ -1637,10 +1637,9 @@ async def patch_project(
         return ToolOutcome(problem=_unexpected("patch_project", exc))
 
 
-async def patch_episode_meta(
+def _patch_episode_meta_sync(
     request: ToolRequest[PatchEpisodeMetaRequest],
     scope: ProjectScope,
-    _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[PatchEpisodeMetaResult]:
     value = request.value
@@ -1657,6 +1656,15 @@ async def patch_episode_meta(
             value=value.value,
         )
     )
+
+
+async def patch_episode_meta(
+    request: ToolRequest[PatchEpisodeMetaRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[PatchEpisodeMetaResult]:
+    return await asyncio.to_thread(_patch_episode_meta_sync, request, scope, services)
 
 
 async def rename_asset(

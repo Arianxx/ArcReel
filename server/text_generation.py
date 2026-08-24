@@ -465,7 +465,7 @@ async def generate_drama_step1(
             )
 
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_DRAMA_STEP1)
-        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+        async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             draft_baseline = _draft_file_revision(draft_path)
         schema = build_drama_normalized_script_model(supported_durations)
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_name)
@@ -489,7 +489,7 @@ async def generate_drama_step1(
                 scene["needs_replan"] = True
 
         step1_path = episode_drafts_dir(project_path, episode) / STEP1_FILENAMES["drama"]
-        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+        async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             _assert_draft_revision(draft_path, draft_baseline)
             with script_review.formal_step1_lock(project_path, episode, step1_path):
                 script_review.write_formal_step1_locked(project_path, episode, step1_path, content, basis=step1_basis)
@@ -994,7 +994,7 @@ async def generate_reference_step1(
             )
 
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_STEP1)
-        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+        async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             draft_baseline = _draft_file_revision(draft_path)
         schema = build_reference_units_step1_model(split_caps.durations)
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_name)
@@ -1020,7 +1020,7 @@ async def generate_reference_step1(
             source_language=project.get("source_language"),
         )
         if violations:
-            with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
                 _assert_draft_revision(draft_path, draft_baseline)
                 with script_review.step1_write_lock(project_path, episode) as step1_path:
                     report = quarantine_and_report(
@@ -1042,7 +1042,7 @@ async def generate_reference_step1(
             episode=episode,
             max_refs=split_caps.max_refs,
         )
-        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+        async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             _assert_draft_revision(draft_path, draft_baseline)
             with script_review.step1_write_lock(project_path, episode) as step1_path:
                 script_review.write_step1_locked(project_path, episode, {"units": raw_units}, basis=step1_basis)
@@ -1110,7 +1110,7 @@ async def generate_narration_step1(
             )
 
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
-        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+        async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             draft_baseline = _draft_file_revision(draft_path)
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_name)
         result = await generator.generate(
@@ -1142,7 +1142,7 @@ async def generate_narration_step1(
         )
         step1_path = _narration_step1_path(project_path, episode)
         if violations:
-            with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+            async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
                 _assert_draft_revision(draft_path, draft_baseline)
                 with script_review.formal_step1_lock(project_path, episode, step1_path):
                     report = quarantine_and_report(
@@ -1158,7 +1158,7 @@ async def generate_narration_step1(
                     )
             raise TextGenerationError(report)
 
-        with ProjectManager(str(project_path.parent)).file_lock(draft_path):
+        async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
             _assert_draft_revision(draft_path, draft_baseline)
             with script_review.formal_step1_lock(project_path, episode, step1_path):
                 script_review.write_formal_step1_locked(

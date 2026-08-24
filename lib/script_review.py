@@ -25,7 +25,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -383,7 +383,10 @@ def write_formal_step1_locked(
     changed = previous != content
     quarantine = None if dependent_quarantine is None else quarantine_path(project_path, episode, dependent_quarantine)
     paths = (path,) if quarantine is None else (path, quarantine)
-    with formal_step1_write_transaction(project_path, episode, *paths, basis=basis):
+    quarantine_lock = (
+        ProjectManager(str(project_path.parent)).file_lock(quarantine) if quarantine is not None else nullcontext()
+    )
+    with quarantine_lock, formal_step1_write_transaction(project_path, episode, *paths, basis=basis):
         atomic_write_json(path, content)
         if changed and clear_dependent_quarantine and dependent_quarantine is not None:
             clear_quarantine(project_path, episode, dependent_quarantine)

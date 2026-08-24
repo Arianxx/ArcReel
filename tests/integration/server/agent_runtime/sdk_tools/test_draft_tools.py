@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import threading
+from contextlib import contextmanager
 
 import pytest
 
@@ -175,17 +177,100 @@ async def test_open_draft_keeps_malformed_non_dict_unit_slot(fake_ctx: ToolConte
 
 async def test_open_draft_rejects_missing_source_without_side_effect(
     fake_ctx: ToolContext,
+    monkeypatch,
 ) -> None:
     """`source` 指向不存在的文件时不落盘草稿：草稿一旦创建就把这个坏路径记进 meta.source，
     晋升时 `_load_novel_source` 会反复报错，而草稿在场又挡住重新取回改正 source，Agent
     会卡在一个自己改不动的死角。校验失败时不产生持久副作用，Agent 改对参数重试即可。"""
     _rv_source(fake_ctx)
     _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
+    from server import draft_workflow as mod
+
+    original_to_thread = asyncio.to_thread
+    offloaded: list[str] = []
+
+    async def observed_to_thread(function, /, *args, **kwargs):
+        offloaded.append(function.__name__)
+        return await original_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(mod.asyncio, "to_thread", observed_to_thread)
 
     out = await _open_for_edit(fake_ctx, source="source/episode_不存在.txt")
 
     assert out.get("is_error") is True
     assert not _rv_quarantine_path(fake_ctx).exists()
+    assert offloaded == ["_load_novel_source"]
+
+
+async def test_step1_write_cannot_race_a_step2_draft_patch(fake_ctx: ToolContext, monkeypatch) -> None:
+    from lib.project_manager import ProjectManager
+    from server import draft_workflow as mod
+
+    _rv_source(fake_ctx)
+    _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
+    fake_ctx.pm.script_payload = {
+        "title": "第一集",
+        "content_mode": "narration",
+        "episode": 1,
+        "video_units": [{"unit_id": "E1U01", "text": "@[张三] 起身", "duration_seconds": 4}],
+    }
+    opened = _draft_result(await _open_for_edit(fake_ctx, doc_type="reference_step2"))
+    changed = copy.deepcopy(opened["content"])
+    changed["units"][0]["text"] = "并发编辑"
+    target = quarantine_path(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2)
+    patch_reached_write = threading.Event()
+    allow_patch_write = threading.Event()
+    writer_attempted_draft_lock = threading.Event()
+    original_atomic_write = mod.atomic_write_json
+    original_file_lock = ProjectManager.file_lock
+
+    def paused_atomic_write(path, value) -> None:
+        if path == target:
+            patch_reached_write.set()
+            assert allow_patch_write.wait(timeout=5)
+        original_atomic_write(path, value)
+
+    @contextmanager
+    def observed_file_lock(self, path):
+        if path == target:
+            writer_attempted_draft_lock.set()
+        with original_file_lock(self, path):
+            yield
+
+    monkeypatch.setattr(mod, "atomic_write_json", paused_atomic_write)
+    monkeypatch.setattr(ProjectManager, "file_lock", observed_file_lock)
+
+    def patch() -> dict:
+        return asyncio.run(
+            _call(
+                patch_draft_tool(fake_ctx),
+                {
+                    "episode": 1,
+                    "doc_type": "reference_step2",
+                    "content": changed,
+                    "base_revision": opened["revision"],
+                },
+            )
+        )
+
+    def rewrite_step1() -> None:
+        with script_review.step1_write_lock(fake_ctx.project_path, 1):
+            script_review.write_step1_locked(
+                fake_ctx.project_path,
+                1,
+                {"units": [_rv_saved_unit("@[张三] 修改 step1")]},
+            )
+
+    patch_task = asyncio.create_task(asyncio.to_thread(patch))
+    assert await asyncio.to_thread(patch_reached_write.wait, 1)
+    writer_task = asyncio.create_task(asyncio.to_thread(rewrite_step1))
+    attempted = await asyncio.to_thread(writer_attempted_draft_lock.wait, 1)
+    allow_patch_write.set()
+    await asyncio.wait_for(patch_task, timeout=2)
+    await asyncio.wait_for(writer_task, timeout=2)
+
+    assert attempted
+    assert not target.exists()
 
 
 async def test_open_draft_rejects_non_reference_episode(fake_ctx: ToolContext) -> None:

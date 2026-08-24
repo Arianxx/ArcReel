@@ -552,7 +552,7 @@ async def _open_drama_step1_for_edit(ctx: DraftContext, episode: int, source: st
     # 会卡在一个自己改不动的死角。校验失败时不落盘，无效参数不留持久副作用。
     if source is not None:
         try:
-            _load_novel_source(project_path, source)
+            await asyncio.to_thread(_load_novel_source, project_path, source)
         except ValueError as exc:
             raise DraftWorkflowError("draft_open_failed", f"❌ {exc}") from exc
 
@@ -764,7 +764,7 @@ async def _open_narration_step1_for_edit(ctx: DraftContext, episode: int, source
     # 会卡在一个自己改不动的死角。校验失败时不落盘，无效参数不留持久副作用。
     if source is not None:
         try:
-            _load_novel_source(project_path, source)
+            await asyncio.to_thread(_load_novel_source, project_path, source)
         except ValueError as exc:
             raise DraftWorkflowError("draft_open_failed", f"❌ {exc}") from exc
 
@@ -877,7 +877,7 @@ async def _open_reference_step1_for_edit(ctx: DraftContext, episode: int, source
     # 无效参数不留持久副作用。
     if source is not None:
         try:
-            _load_novel_source(project_path, source)
+            await asyncio.to_thread(_load_novel_source, project_path, source)
         except ValueError as exc:
             raise DraftWorkflowError("draft_open_failed", f"❌ {exc}") from exc
 

@@ -788,27 +788,26 @@ async def test_normalize_drama_script_serializes_commit_with_draft_edits(fake_ct
     async def fake_create(_task_type, project_name=None):
         return _Generator()
 
-    def regenerate() -> dict:
-        return asyncio.run(
-            _call(normalize_drama_script_tool(fake_ctx), {"episode": 1, "source": "source/episode_1.txt"})
-        )
-
     _use_fake_caps(fake_ctx)
     monkeypatch.setattr(mod.TextGenerator, "create", fake_create)
     pm = ProjectManager(str(fake_ctx.project_path.parent))
     target = _drama_quarantine_path(fake_ctx)
-    attempted = threading.Event()
-    original_file_lock = ProjectManager.file_lock
-    with pm.file_lock(_drama_quarantine_path(fake_ctx)):
+    attempted = asyncio.Event()
+    original_async_file_lock = ProjectManager.async_file_lock
+    async with pm.async_file_lock(target):
 
-        def observed_file_lock(self, path):
+        @asynccontextmanager
+        async def observed_async_file_lock(self, path, **kwargs):
             if path == target:
                 attempted.set()
-            return original_file_lock(self, path)
+            async with original_async_file_lock(self, path, **kwargs):
+                yield
 
-        monkeypatch.setattr(ProjectManager, "file_lock", observed_file_lock)
-        task = asyncio.create_task(asyncio.to_thread(regenerate))
-        assert await asyncio.to_thread(attempted.wait, 1)
+        monkeypatch.setattr(ProjectManager, "async_file_lock", observed_async_file_lock)
+        task = asyncio.create_task(
+            _call(normalize_drama_script_tool(fake_ctx), {"episode": 1, "source": "source/episode_1.txt"})
+        )
+        await asyncio.wait_for(attempted.wait(), timeout=1)
         assert not task.done(), "generation commit must wait for the draft lock"
 
     out = await task
