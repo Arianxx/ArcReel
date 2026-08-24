@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -121,12 +122,15 @@ async def test_get_video_capabilities_error(fake_ctx: ToolContext) -> None:
 async def test_generate_step1_rejects_inapplicable_content_modes(fake_ctx: ToolContext, content_mode: str) -> None:
     fake_ctx.pm.project_payload["content_mode"] = content_mode
     resolver = _use_fake_caps(fake_ctx)
+    caller_thread = threading.get_ident()
 
     out = await _call(generate_step1_tool(fake_ctx), {"episode": 1, "dry_run": True})
 
     assert out.get("is_error") is True
     assert json.loads(out["content"][0]["text"])["problem"]["code"] == "generation_refused"
     assert resolver.capability_calls == []
+    assert fake_ctx.pm.readonly_load_threads  # type: ignore[attr-defined]
+    assert all(thread != caller_thread for thread in fake_ctx.pm.readonly_load_threads)  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize("factory", [generate_episode_script_tool, generate_step1_tool])

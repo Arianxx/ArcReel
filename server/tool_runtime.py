@@ -240,7 +240,7 @@ async def generate_step1(
     services: Services,
 ) -> ToolOutcome[TextGenerationResult]:
     try:
-        project = services.projects.load_project(scope.project_name)
+        project = await asyncio.to_thread(services.projects.load_project_readonly, scope.project_name)
         content_mode = project.get("content_mode", "narration")
         if content_mode == "ad":
             raise TextGenerationError("广告/短片项目无 step1，请直接调用 generate_episode_script")

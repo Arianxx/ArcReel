@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,7 @@ class _FakePM:
             "style": "anime",
             "style_description": "soft pastel",
         }
+        self.readonly_load_threads: list[int] = []
         self.script_payload: dict[str, Any] = {
             "content_mode": "narration",
             "episode": 1,
@@ -209,6 +211,7 @@ class _FakePM:
         return self.project_payload
 
     def load_project_readonly(self, _name: str) -> dict[str, Any]:
+        self.readonly_load_threads.append(threading.get_ident())
         return self.project_payload
 
     def load_script(self, _name: str, filename: str) -> dict[str, Any]:
@@ -397,12 +400,12 @@ def _rv_project(fake_ctx: ToolContext, generation_mode: str = "reference_video")
 
     盘上的 project.json 与 pm 的内存视图同步：生成入口从盘上读，晋升工具经 ``pm.load_project`` 读。
     """
-    (fake_ctx.project_path / "project.json").write_text(
-        json.dumps({"content_mode": "narration", "generation_mode": generation_mode}, ensure_ascii=False),
-        encoding="utf-8",
-    )
     fake_ctx.pm.project_payload["content_mode"] = "narration"  # pyright: ignore[reportAttributeAccessIssue]
     fake_ctx.pm.project_payload["generation_mode"] = generation_mode  # pyright: ignore[reportAttributeAccessIssue]
+    (fake_ctx.project_path / "project.json").write_text(
+        json.dumps(fake_ctx.pm.project_payload, ensure_ascii=False),  # pyright: ignore[reportAttributeAccessIssue]
+        encoding="utf-8",
+    )
 
 
 def _rv_source(fake_ctx: ToolContext) -> None:

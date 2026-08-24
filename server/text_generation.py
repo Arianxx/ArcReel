@@ -470,7 +470,7 @@ async def generate_drama_step1(
     episode = request.episode
     instructions = _instructions(request.instructions)
     project_path = projects.get_project_path(project_name)
-    project = projects.load_project(project_name)
+    project = await asyncio.to_thread(projects.load_project_readonly, project_name)
     try:
         novel_text, prompt_inputs, step1_basis = await asyncio.to_thread(
             _load_step1_source_with_basis,
@@ -1016,7 +1016,7 @@ async def generate_reference_step1(
     episode = request.episode
     instructions = _instructions(request.instructions)
     project_path = projects.get_project_path(project_name)
-    project = projects.load_project(project_name)
+    project = await asyncio.to_thread(projects.load_project_readonly, project_name)
 
     try:
         novel_text, prompt_inputs, step1_basis = await asyncio.to_thread(
@@ -1169,7 +1169,7 @@ async def generate_narration_step1(
     episode = request.episode
     instructions = _instructions(request.instructions)
     project_path = projects.get_project_path(project_name)
-    project = projects.load_project(project_name)
+    project = await asyncio.to_thread(projects.load_project_readonly, project_name)
 
     try:
         novel_text, prompt_inputs, step1_basis = await asyncio.to_thread(
