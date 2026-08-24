@@ -91,6 +91,10 @@ class TextGenerationRequest:
     instructions: str | None = None
     dry_run: bool = False
 
+    def __post_init__(self) -> None:
+        if isinstance(self.episode, bool) or self.episode < 1:
+            raise ValueError("episode must be a positive integer")
+
 
 @dataclass(frozen=True, slots=True)
 class TextGenerationResult:

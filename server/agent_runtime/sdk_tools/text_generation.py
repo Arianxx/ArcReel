@@ -270,7 +270,7 @@ def generate_episode_script_tool(ctx: ToolContext):
         {
             "type": "object",
             "properties": {
-                "episode": {"type": "integer", "description": "剧集编号"},
+                "episode": {"type": "integer", "minimum": 1, "description": "剧集编号"},
                 "instructions": _INSTRUCTIONS_SCHEMA,
                 "dry_run": {"type": "boolean", "description": "仅显示 prompt，不调用模型"},
             },
@@ -299,7 +299,7 @@ def generate_step1_tool(
         {
             "type": "object",
             "properties": {
-                "episode": {"type": "integer", "description": "剧集编号"},
+                "episode": {"type": "integer", "minimum": 1, "description": "剧集编号"},
                 "source": {"type": "string", "description": "可选的项目内源文件相对路径"},
                 "instructions": _INSTRUCTIONS_SCHEMA,
                 "dry_run": {"type": "boolean", "description": "仅显示 prompt，不调用模型"},

@@ -1397,7 +1397,8 @@ async def reset_episode_planning(
         return ToolOutcome(problem=problem)
     value = request.value
     try:
-        result = resetter(
+        result = await asyncio.to_thread(
+            resetter,
             services.projects.get_project_path(scope.project_name),
             from_episode=value.from_episode,
             confirm_consumed=value.confirm_consumed,
@@ -1658,7 +1659,13 @@ async def rename_asset(
 ) -> ToolOutcome[RenameAssetResult]:
     value = request.value
     try:
-        report = services.projects.rename_asset(scope.project_name, value.table, value.old_name, value.new_name)
+        report = await asyncio.to_thread(
+            services.projects.rename_asset,
+            scope.project_name,
+            value.table,
+            value.old_name,
+            value.new_name,
+        )
     except Exception as exc:  # noqa: BLE001
         return ToolOutcome(problem=_unexpected("rename_asset", exc))
     message = (

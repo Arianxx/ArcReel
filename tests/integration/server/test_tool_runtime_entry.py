@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
 
+from lib.episode_reset import EpisodeResetResult
 from lib.project_manager import ProjectManager
 from lib.project_migration_failure import MIGRATION_FAILURE_CODE, record_migration_failure
 from server.tool_runtime import (
     CallerContext,
     CreateProjectToolRequest,
     ProjectScope,
+    RenameAssetRequest,
+    ResetEpisodePlanningRequest,
     Services,
     ToolRequest,
     UploadSourceRequest,
@@ -18,6 +22,8 @@ from server.tool_runtime import (
     list_project_files,
     list_projects,
     list_source_files,
+    rename_asset,
+    reset_episode_planning,
     upload_source,
 )
 
@@ -190,6 +196,48 @@ async def test_file_enumeration_runs_off_event_loop(tmp_path: Path, monkeypatch,
 
     assert outcome.problem is None
     assert offloaded == ["_business_file_entries"]
+
+
+async def test_filesystem_heavy_mutations_run_off_event_loop(tmp_path: Path, monkeypatch) -> None:
+    services = _services(tmp_path)
+    services.projects.create_project("demo")
+    services.projects.create_project_metadata("demo", "Demo")
+    services.projects.upsert_assets("demo", "characters", {"旧名": {"description": "角色"}})
+    scope = ProjectScope(project_name="demo", projects_root=services.projects.projects_root)
+    caller = CallerContext(user_id="test", source="mcp")
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+
+    def resetter(_project_path: Path, *, from_episode: int, confirm_consumed: bool) -> EpisodeResetResult:
+        worker_threads.append(threading.get_ident())
+        return EpisodeResetResult([], [], [], [])
+
+    reset = await reset_episode_planning(
+        ToolRequest(ResetEpisodePlanningRequest(from_episode=1)),
+        scope,
+        caller,
+        services,
+        resetter=resetter,
+    )
+
+    original_rename = services.projects.rename_asset
+
+    def tracked_rename(project_name: str, table: str, old_name: str, new_name: str):
+        worker_threads.append(threading.get_ident())
+        return original_rename(project_name, table, old_name, new_name)
+
+    monkeypatch.setattr(services.projects, "rename_asset", tracked_rename)
+    renamed = await rename_asset(
+        ToolRequest(RenameAssetRequest(table="characters", old_name="旧名", new_name="新名")),
+        scope,
+        caller,
+        services,
+    )
+
+    assert reset.problem is None
+    assert renamed.problem is None
+    assert len(worker_threads) == 2
+    assert all(thread != caller_thread for thread in worker_threads)
 
 
 def test_create_project_request_rejects_mode_specific_fields_before_writing(tmp_path: Path) -> None:

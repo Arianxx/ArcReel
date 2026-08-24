@@ -19,7 +19,7 @@ from server.agent_runtime.sdk_tools.text_generation import (
     generate_step1_tool,
     get_video_capabilities_tool,
 )
-from server.text_generation import _parse_normalized_content
+from server.text_generation import TextGenerationRequest, _parse_normalized_content
 from tests.integration.server.agent_runtime.sdk_tools.sdk_tools_support import (
     _call,
     _fake_caps_resolver,
@@ -127,6 +127,13 @@ async def test_generate_step1_rejects_inapplicable_content_modes(fake_ctx: ToolC
     assert out.get("is_error") is True
     assert json.loads(out["content"][0]["text"])["problem"]["code"] == "generation_refused"
     assert resolver.capability_calls == []
+
+
+@pytest.mark.parametrize("factory", [generate_episode_script_tool, generate_step1_tool])
+def test_generation_tools_require_positive_episode(fake_ctx: ToolContext, factory) -> None:
+    assert factory(fake_ctx).input_schema["properties"]["episode"]["minimum"] == 1
+    with pytest.raises(ValueError, match="positive integer"):
+        TextGenerationRequest(episode=0)
 
 
 async def test_generate_episode_script_dry_run(fake_ctx: ToolContext, monkeypatch) -> None:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import threading
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -468,6 +470,68 @@ async def test_promote_draft_step2_uses_async_factory(fake_ctx: ToolContext, mon
     assert seen["expected_fingerprint"] == "formal-baseline"
 
 
+async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
+    fake_ctx: ToolContext, monkeypatch
+) -> None:
+    from server import draft_workflow as mod
+
+    _rv_project(fake_ctx)
+    write_quarantine(
+        fake_ctx.project_path,
+        1,
+        QUARANTINE_KIND_STEP2,
+        content={"title": "第1集", "units": [{"text": "@[张三] 起身"}]},
+        violations=[],
+    )
+    path = quarantine_path(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP2)
+    pm = ProjectManager(str(fake_ctx.project_path.parent))
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_lock() -> None:
+        with pm.file_lock(path):
+            held.set()
+            release.wait(2)
+
+    holder = asyncio.create_task(asyncio.to_thread(hold_lock))
+    assert await asyncio.to_thread(held.wait, 1)
+    attempted = asyncio.Event()
+    original_async_lock = ProjectManager.async_file_lock
+
+    @asynccontextmanager
+    async def observed_async_lock(self, locked_path):
+        attempted.set()
+        async with original_async_lock(self, locked_path):
+            yield
+
+    monkeypatch.setattr(ProjectManager, "async_file_lock", observed_async_lock)
+
+    class _FakeGenerator:
+        @classmethod
+        async def create(cls, project_path, **_kwargs):
+            obj = cls()
+            obj.project_path = project_path
+            return obj
+
+        async def promote_reference_step2_draft(self, episode: int, **_kwargs):
+            return self.project_path / "scripts" / f"episode_{episode}.json"
+
+    monkeypatch.setattr(mod, "ScriptGenerator", _FakeGenerator)
+    safety_release = threading.Timer(1, release.set)
+    safety_release.start()
+    promotion = asyncio.create_task(_promote(fake_ctx))
+    try:
+        await asyncio.wait_for(attempted.wait(), 0.3)
+        assert not promotion.done()
+    finally:
+        release.set()
+        safety_release.cancel()
+
+    await holder
+    out = await promotion
+    assert out.get("is_error") is not True, out
+
+
 async def test_promote_draft_refuses_after_mode_switch(fake_ctx: ToolContext) -> None:
     """切走参考路径后不再晋升残留草稿：晋升会按参考路径的形状覆盖该集正式剧本。"""
     _rv_project(fake_ctx, generation_mode="storyboard")
@@ -732,9 +796,19 @@ async def test_normalize_drama_script_serializes_commit_with_draft_edits(fake_ct
     _use_fake_caps(fake_ctx)
     monkeypatch.setattr(mod.TextGenerator, "create", fake_create)
     pm = ProjectManager(str(fake_ctx.project_path.parent))
+    target = _drama_quarantine_path(fake_ctx)
+    attempted = threading.Event()
+    original_file_lock = ProjectManager.file_lock
     with pm.file_lock(_drama_quarantine_path(fake_ctx)):
+
+        def observed_file_lock(self, path):
+            if path == target:
+                attempted.set()
+            return original_file_lock(self, path)
+
+        monkeypatch.setattr(ProjectManager, "file_lock", observed_file_lock)
         task = asyncio.create_task(asyncio.to_thread(regenerate))
-        await asyncio.sleep(0.1)
+        assert await asyncio.to_thread(attempted.wait, 1)
         assert not task.done(), "generation commit must wait for the draft lock"
 
     out = await task

@@ -988,7 +988,7 @@ class DraftWorkflow:
         try:
             if resolved == QUARANTINE_KIND_STEP2:
                 path = quarantine_path(self.ctx.project_path, episode, resolved)
-                with ProjectManager(str(self.ctx.projects_root)).file_lock(path):
+                async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
                     existing = read_quarantine(self.ctx.project_path, episode, resolved)
                     if existing is not None:
                         return self._read(episode, resolved)
@@ -1070,7 +1070,7 @@ class DraftWorkflow:
         resolved = self._kind(episode, doc_type)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
         result_path: Path | None = None
-        with ProjectManager(str(self.ctx.projects_root)).file_lock(path):
+        async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
             draft = read_quarantine(self.ctx.project_path, episode, resolved)
             if draft is None:
                 return self._read(episode, resolved)
@@ -1122,7 +1122,7 @@ class DraftWorkflow:
     async def discard(self, episode: int, doc_type: str, base_revision: str) -> dict[str, Any]:
         resolved = self._kind(episode, doc_type, allow_stale_discard=True)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
-        with ProjectManager(str(self.ctx.projects_root)).file_lock(path):
+        async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
             draft = read_quarantine(self.ctx.project_path, episode, resolved)
             if draft is not None:
                 actual_revision = draft_revision(draft)
