@@ -1323,7 +1323,7 @@ export default {
   'review_fix_request_prefill_header':
     '第 {{episode}} 集的内容整理草稿有 {{count}} 处违约待修复，请用 doc_type={{docType}} 调用 open_draft 读取草稿，再用同一 doc_type 调用 patch_draft 修正：',
   'review_fix_request_promote_prefill':
-    '第 {{episode}} 集的内容整理草稿重新校验已无违约，但尚未晋升为正式内容，请用 doc_type={{docType}} 调用 promote_draft 晋升。',
+    '第 {{episode}} 集的内容整理草稿重新校验已无违约，但尚未晋升为正式内容，请先用 doc_type={{docType}} 调用 open_draft，再用同一 doc_type 调用 promote_draft，并把返回的 revision 作为 base_revision 传入。',
 
   // ReferenceStep1PreviewPanel（reference_video 变体 step1 按集预览）
   'reference_step1_source_text_label': '原文',

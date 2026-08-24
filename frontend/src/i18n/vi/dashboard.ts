@@ -1298,7 +1298,7 @@ export default {
   'review_fix_request_prefill_header':
     'Bản nháp tổ chức nội dung của tập {{episode}} có {{count}} vi phạm cần sửa; hãy gọi open_draft với doc_type={{docType}} để đọc, sau đó sửa bằng patch_draft với cùng doc_type:',
   'review_fix_request_promote_prefill':
-    'Bản nháp tổ chức nội dung của tập {{episode}} khi xác thực lại không còn vi phạm nhưng vẫn chưa được thăng cấp — hãy gọi promote_draft với doc_type={{docType}}.',
+    'Bản nháp tổ chức nội dung của tập {{episode}} khi xác thực lại không còn vi phạm nhưng vẫn chưa được thăng cấp — hãy gọi open_draft với doc_type={{docType}}, sau đó gọi promote_draft với cùng doc_type và truyền revision trả về làm base_revision.',
 
   // ReferenceStep1PreviewPanel (xem trước theo tập, biến thể step1 của reference_video)
   'reference_step1_source_text_label': 'Văn bản gốc',

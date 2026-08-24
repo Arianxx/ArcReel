@@ -1324,7 +1324,7 @@ export default {
   'review_fix_request_prefill_header':
     'Episode {{episode}}’s content organization draft has {{count}} violation(s) to fix — call open_draft with doc_type={{docType}} to read it, then correct it with patch_draft using the same doc_type:',
   'review_fix_request_promote_prefill':
-    'Episode {{episode}}’s content organization draft now revalidates with no violations but has not been promoted yet — call promote_draft with doc_type={{docType}}.',
+    'Episode {{episode}}’s content organization draft now revalidates with no violations but has not been promoted yet — call open_draft with doc_type={{docType}}, then call promote_draft with the same doc_type and pass the returned revision as base_revision.',
 
   // ReferenceStep1PreviewPanel (reference_video variant step1 per-episode preview)
   'reference_step1_source_text_label': 'Source text',
