@@ -527,7 +527,7 @@ async def test_promote_draft_waits_for_file_lock_without_blocking_event_loop(
         release.set()
         safety_release.cancel()
 
-    await holder
+    assert await holder is None
     out = await promotion
     assert out.get("is_error") is not True, out
 
