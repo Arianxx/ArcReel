@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.28.0](https://github.com/ArcReel/ArcReel/compare/v0.27.0...v0.28.0) (2026-08-24)
+
+
+### ✨ 新功能
+
+* **agent:** return complete workflow tool results ([165888e](https://github.com/ArcReel/ArcReel/commit/165888e048c7ef8fb171e5b27b7e64845aed4172)), closes [#2064](https://github.com/ArcReel/ArcReel/issues/2064)
+* **frontend:** make embedded agent credentials optional ([75211c8](https://github.com/ArcReel/ArcReel/commit/75211c885e4f555615d26d774c76aac092a5dd2d)), closes [#2065](https://github.com/ArcReel/ArcReel/issues/2065)
+* **frontend:** 记住智能体栏开合偏好 ([a676edb](https://github.com/ArcReel/ArcReel/commit/a676edbdc31a59e85f8f3702a8f3007543ae96a3)), closes [#2066](https://github.com/ArcReel/ArcReel/issues/2066)
+
+
+### 🐛 Bug 修复
+
+* address stage integration review findings ([6cd3d44](https://github.com/ArcReel/ArcReel/commit/6cd3d44407b7e19210d5b7437c2e4efbab7ba39b))
+
+
+### 📚 文档
+
+* simplify pull request template ([3a9680b](https://github.com/ArcReel/ArcReel/commit/3a9680b790963bf69a10b529ebe0c5e2fcf8a588))
+
 ## [0.27.0](https://github.com/ArcReel/ArcReel/compare/v0.26.0...v0.27.0) (2026-08-24)
 
 
