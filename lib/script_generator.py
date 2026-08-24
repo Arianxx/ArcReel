@@ -59,7 +59,7 @@ from lib.episode_paths import (
     episode_drafts_dir,
     episode_script_filename,
 )
-from lib.project_manager import ProjectManager
+from lib.project_manager import ProjectManager, ScriptWriteConflict
 from lib.prompt_builders_ad import build_ad_prompt, build_ad_reference_prompt
 from lib.prompt_builders_reference import build_reference_video_prompt
 from lib.prompt_builders_script import (
@@ -408,6 +408,8 @@ class ScriptGenerator:
         for scene in content_scenes:
             require_script_unit_admitted("scenes", scene)
         await self._assert_drama_step1_durations(content_scenes, episode=episode, gen_mode=gen_mode)
+        filename = output_filename or episode_script_filename(episode)
+        formal_baseline = content_fingerprint(self.project_path / "scripts" / filename)
 
         logger.info("正在生成第 %d 集剧本（drama step2 视觉层）...", episode)
         result = await self._generate_text(
@@ -424,7 +426,6 @@ class ScriptGenerator:
         script_data = {"title": content.get("title") or f"第{episode}集", "scenes": merged_scenes}
         script_data = self._add_metadata(script_data, episode)
 
-        filename = output_filename or episode_script_filename(episode)
         pm = ProjectManager(str(self.project_path.parent))
         output_path = pm.save_script(
             self.project_path.name,
@@ -432,6 +433,7 @@ class ScriptGenerator:
             filename,
             validate=True,
             artifact_basis=self._artifact_basis,
+            expected_fingerprint=formal_baseline,
         )
 
         self._quality_probe(script_data, episode)
@@ -534,6 +536,8 @@ class ScriptGenerator:
         unit 的生效档位，不会因此跳过取档校验。
         """
         assert self.generator is not None  # generate() 入口已检查
+        filename = output_filename or episode_script_filename(episode)
+        formal_baseline = content_fingerprint(self.project_path / "scripts" / filename)
         # 调用 TextBackend
         logger.info("正在生成第 %d 集剧本...", episode)
         result = await self._generate_text(
@@ -581,15 +585,28 @@ class ScriptGenerator:
         # 经写盘统一入口保存：整集生成无「改前」，按严格结构校验（等价原 response_schema 的
         # Pydantic 校验），并继承 metadata 重算、加锁、filename↔episode 一致性与 project.json
         # 同步——消除「裸 json.dump 旁路」，使 _write_script_unlocked 成为剧本唯一写入点。
-        filename = output_filename or episode_script_filename(episode)
         pm = ProjectManager(str(self.project_path.parent))
-        output_path = pm.save_script(
-            self.project_path.name,
-            script_data,
-            filename,
-            validate=True,
-            artifact_basis=self._artifact_basis,
-        )
+        try:
+            output_path = pm.save_script(
+                self.project_path.name,
+                script_data,
+                filename,
+                validate=True,
+                artifact_basis=self._artifact_basis,
+                expected_fingerprint=formal_baseline,
+            )
+        except ScriptWriteConflict as exc:
+            if reference_step1 is None:
+                raise
+            raise self._quarantine_reference_step2(
+                episode,
+                response_text,
+                DraftViolation(
+                    "正式剧本在模型生成期间已变化；本次生成结果已保留为 step2 草稿，请合并最新正式内容后再晋升",
+                    code="formal_revision_conflict",
+                ),
+                base_fingerprint=formal_baseline,
+            ) from exc
 
         self._quality_probe(script_data, episode)
 
@@ -1315,7 +1332,14 @@ class ScriptGenerator:
                 data["title"] = f"第{episode}集"
         return ReferenceStep2FlatScript.model_validate(data).model_dump()
 
-    def _quarantine_reference_step2(self, episode: int, response_text: str, exc: DraftViolation) -> DraftViolation:
+    def _quarantine_reference_step2(
+        self,
+        episode: int,
+        response_text: str,
+        exc: DraftViolation,
+        *,
+        base_fingerprint: str | None | _UnsetExpectedFingerprint = _UNSET_EXPECTED_FINGERPRINT,
+    ) -> DraftViolation:
         """把违约的 step2 产出与报告落待修复草稿，返回携带报告的违约异常（由调用方抛出）。
 
         返回而不是自己抛：调用点用 ``raise ... from exc`` 保留原始违约链，异常在此被构造却在
@@ -1331,7 +1355,13 @@ class ScriptGenerator:
                 QUARANTINE_KIND_STEP2,
                 content=self._step2_flat_content(response_text, episode),
                 violations=violation_items(exc),
-                meta={"base_fingerprint": content_fingerprint(formal_path)},
+                meta={
+                    "base_fingerprint": (
+                        content_fingerprint(formal_path)
+                        if isinstance(base_fingerprint, _UnsetExpectedFingerprint)
+                        else base_fingerprint
+                    )
+                },
             )
         return DraftViolation(report, code="quarantined")
 

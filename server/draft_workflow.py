@@ -93,6 +93,13 @@ class PatchDraftRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class PromoteDraftRequest:
+    episode: int
+    doc_type: str
+    base_revision: str
+
+
+@dataclass(frozen=True, slots=True)
 class DiscardDraftRequest:
     episode: int
     doc_type: str
@@ -1066,7 +1073,7 @@ class DraftWorkflow:
             )
         return self._read(episode, resolved)
 
-    async def promote(self, episode: int, doc_type: str) -> dict[str, Any]:
+    async def promote(self, episode: int, doc_type: str, base_revision: str) -> dict[str, Any]:
         resolved = self._kind(episode, doc_type)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
         result_path: Path | None = None
@@ -1074,6 +1081,12 @@ class DraftWorkflow:
             draft = read_quarantine(self.ctx.project_path, episode, resolved)
             if draft is None:
                 return self._read(episode, resolved)
+            actual_revision = draft_revision(draft)
+            if base_revision != actual_revision:
+                raise DraftWorkflowError(
+                    "revision_conflict",
+                    f"draft revision changed: expected {base_revision}, actual {actual_revision}",
+                )
             try:
                 if resolved in _SINGLE_STEP1_PROMOTERS:
                     await _SINGLE_STEP1_PROMOTERS[resolved](self.ctx, episode, draft)

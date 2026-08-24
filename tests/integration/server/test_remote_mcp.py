@@ -336,7 +336,10 @@ async def test_remote_mcp_draft_supports_multiple_patches_and_discard(remote_ser
                         "discard_draft", {**args, "base_revision": second.structuredContent["draft"]["revision"]}
                     )
                     reopened = await session.call_tool("open_draft", args)
-                    promoted = await session.call_tool("promote_draft", args)
+                    promoted = await session.call_tool(
+                        "promote_draft",
+                        {**args, "base_revision": reopened.structuredContent["draft"]["revision"]},
+                    )
 
     assert not opened.isError
     assert not first.isError

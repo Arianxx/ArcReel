@@ -28,7 +28,9 @@ from server.agent_runtime.sdk_tools.text_generation import (
 )
 from server.agent_runtime.sdk_tools.text_generation import (
     generate_episode_script_tool,
+    open_draft_tool,
     patch_draft_tool,
+    promote_draft_tool,
 )
 from tests.integration.server.agent_runtime.sdk_tools.sdk_tools_support import (
     _RV_NOVEL,
@@ -170,6 +172,27 @@ async def test_promote_draft_reports_again_without_round_limit(fake_ctx: ToolCon
     _rv_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
     await _promote(fake_ctx)
     assert [v["code"] for v in _read_rv_quarantine(fake_ctx)["violations"]] == ["braces_in_description"]
+
+
+async def test_promote_draft_rejects_stale_draft_revision(fake_ctx: ToolContext, monkeypatch) -> None:
+    _rv_source(fake_ctx)
+    await _run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[不存在的人] 出场")])
+    args = {"episode": 1, "doc_type": "reference_step1"}
+    opened = json.loads((await _call(open_draft_tool(fake_ctx), args))["content"][0]["text"])["draft"]
+    updated = copy.deepcopy(opened["content"])
+    updated["units"][0]["text"] = "@[张三] 在 @[村口] 出场"
+    patched = await _call(
+        patch_draft_tool(fake_ctx),
+        {**args, "content": updated, "base_revision": opened["revision"]},
+    )
+    assert patched.get("is_error") is not True, patched
+
+    out = await _call(promote_draft_tool(fake_ctx), {**args, "base_revision": opened["revision"]})
+
+    assert out.get("is_error") is True
+    assert "revision_conflict" in out["content"][0]["text"]
+    assert _rv_quarantine_path(fake_ctx).exists()
+    assert not _rv_step1_path(fake_ctx).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +890,48 @@ async def test_normalize_drama_script_preserves_draft_edited_during_model_call(
     assert _read_drama_quarantine(fake_ctx)["content"]["scenes"][0]["scene_description"] == "并发编辑内容"
     formal = json.loads(_drama_step1_path(fake_ctx).read_text(encoding="utf-8"))
     assert formal["scenes"][0]["scene_description"] != "重生成内容"
+
+
+async def test_normalize_drama_script_preserves_output_when_formal_changes_during_model_call(
+    fake_ctx: ToolContext, monkeypatch
+) -> None:
+    from server import text_generation as mod
+
+    _drama_project(fake_ctx)
+    _write_drama_step1(fake_ctx, [_drama_scene(scene_description="生成前内容")])
+    started = asyncio.Event()
+    release = asyncio.Event()
+    regenerated = {"title": "第一集", "scenes": [_drama_scene(scene_description="本次生成内容")]}
+
+    class _Generator:
+        async def generate(self, _request, project_name=None):
+            started.set()
+            await release.wait()
+
+            class _R:
+                text = json.dumps(regenerated, ensure_ascii=False)
+
+            return _R()
+
+    async def fake_create(_task_type, project_name=None):
+        return _Generator()
+
+    _use_fake_caps(fake_ctx)
+    monkeypatch.setattr(mod.TextGenerator, "create", fake_create)
+    generation = asyncio.create_task(
+        _call(normalize_drama_script_tool(fake_ctx), {"episode": 1, "source": "source/episode_1.txt"})
+    )
+    await started.wait()
+    _write_drama_step1(fake_ctx, [_drama_scene(scene_description="并发正式内容")])
+    release.set()
+
+    out = await generation
+
+    assert out.get("is_error") is True
+    assert "formal_revision_conflict" in out["content"][0]["text"]
+    formal = json.loads(_drama_step1_path(fake_ctx).read_text(encoding="utf-8"))
+    assert formal["scenes"][0]["scene_description"] == "并发正式内容"
+    assert _read_drama_quarantine(fake_ctx)["content"]["scenes"][0]["scene_description"] == "本次生成内容"
 
 
 # ---------------------------------------------------------------------------

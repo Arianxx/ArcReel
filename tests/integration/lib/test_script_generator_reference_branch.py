@@ -857,6 +857,32 @@ async def test_step2_violation_quarantines_instead_of_discarding(reference_proje
 
 
 @pytest.mark.asyncio
+async def test_step2_preserves_output_when_formal_script_changes_during_generation(reference_project: Path):
+    formal = await ScriptGenerator(reference_project, generator=_fake_step2_generator(STEP2_UNIT_TEXT)).generate(
+        episode=1
+    )
+    concurrent = _json.loads(formal.read_text(encoding="utf-8"))
+    concurrent["title"] = "并发正式标题"
+    generator = MagicMock()
+    generator.model = "mock"
+
+    async def generate(_request, **_kwargs):
+        formal.write_text(_json.dumps(concurrent, ensure_ascii=False), encoding="utf-8")
+        return MagicMock(text=_step2_response(STEP2_UNIT_TEXT, title="本次生成标题"))
+
+    generator.generate = AsyncMock(side_effect=generate)
+
+    with pytest.raises(DraftViolation) as excinfo:
+        await ScriptGenerator(reference_project, generator=generator).generate(episode=1)
+
+    assert "formal_revision_conflict" in str(excinfo.value)
+    assert _json.loads(formal.read_text(encoding="utf-8"))["title"] == "并发正式标题"
+    envelope = _json.loads(_step2_quarantine(reference_project).read_text(encoding="utf-8"))
+    assert envelope["content"]["title"] == "本次生成标题"
+    assert envelope["meta"]["base_fingerprint"] is not None
+
+
+@pytest.mark.asyncio
 async def test_promote_step2_draft_after_repair(reference_project: Path):
     """修好待修复草稿后晋升：正式剧本落盘、草稿清除，结构仍由 step1 + 正文机械合成。"""
     gen = ScriptGenerator(reference_project, generator=_fake_step2_generator(BAD_STEP2_UNIT_TEXT))

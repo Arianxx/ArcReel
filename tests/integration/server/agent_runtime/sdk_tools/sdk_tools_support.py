@@ -453,7 +453,11 @@ async def _promote(fake_ctx: ToolContext, **caps_kwargs) -> dict:
         doc_type = "reference_step2"
     else:
         doc_type = "reference_step1"
-    return await _call(promote_draft_tool(fake_ctx), {"episode": 1, "doc_type": doc_type})
+    args = {"episode": 1, "doc_type": doc_type}
+    opened = await _call(open_draft_tool(fake_ctx), args)
+    payload = json.loads(opened["content"][0]["text"])
+    revision = payload.get("draft", {}).get("revision", "")
+    return await _call(promote_draft_tool(fake_ctx), {**args, "base_revision": revision})
 
 
 def _write_rv_step1(fake_ctx: ToolContext, units: list[dict]) -> None:
@@ -582,7 +586,10 @@ async def _open_drama_for_edit(fake_ctx: ToolContext, **args) -> dict:
 
 async def _promote_drama(fake_ctx: ToolContext, durations=(4, 6, 8)) -> dict:
     _use_fake_caps(fake_ctx, supported_durations=durations, default_duration=durations[0])
-    return await _call(promote_draft_tool(fake_ctx), {"episode": 1, "doc_type": "drama_step1"})
+    args = {"episode": 1, "doc_type": "drama_step1"}
+    opened = await _call(open_draft_tool(fake_ctx), args)
+    revision = json.loads(opened["content"][0]["text"])["draft"]["revision"]
+    return await _call(promote_draft_tool(fake_ctx), {**args, "base_revision": revision})
 
 
 def _nr_step1_path(fake_ctx: ToolContext) -> Path:
@@ -609,4 +616,7 @@ async def _open_nr_for_edit(fake_ctx: ToolContext, **args) -> dict:
 
 async def _promote_nr(fake_ctx: ToolContext, durations=(4, 6, 8)) -> dict:
     _use_fake_caps(fake_ctx, supported_durations=durations, default_duration=durations[0])
-    return await _call(promote_draft_tool(fake_ctx), {"episode": 1, "doc_type": "narration_step1"})
+    args = {"episode": 1, "doc_type": "narration_step1"}
+    opened = await _call(open_draft_tool(fake_ctx), args)
+    revision = json.loads(opened["content"][0]["text"])["draft"]["revision"]
+    return await _call(promote_draft_tool(fake_ctx), {**args, "base_revision": revision})

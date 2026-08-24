@@ -11,6 +11,7 @@ from lib.project_migration_failure import MIGRATION_FAILURE_CODE, record_migrati
 from server.tool_runtime import (
     CallerContext,
     CreateProjectToolRequest,
+    PatchProjectRequest,
     ProjectScope,
     RenameAssetRequest,
     ResetEpisodePlanningRequest,
@@ -22,6 +23,7 @@ from server.tool_runtime import (
     list_project_files,
     list_projects,
     list_source_files,
+    patch_project,
     rename_asset,
     reset_episode_planning,
     upload_source,
@@ -234,9 +236,24 @@ async def test_filesystem_heavy_mutations_run_off_event_loop(tmp_path: Path, mon
         services,
     )
 
+    original_upsert = services.projects.upsert_assets
+
+    def tracked_upsert(project_name: str, table: str, entries: dict):
+        worker_threads.append(threading.get_ident())
+        return original_upsert(project_name, table, entries)
+
+    monkeypatch.setattr(services.projects, "upsert_assets", tracked_upsert)
+    patched = await patch_project(
+        ToolRequest(PatchProjectRequest(table="characters", entries={"另一角色": {"description": "角色"}})),
+        scope,
+        caller,
+        services,
+    )
+
     assert reset.problem is None
     assert renamed.problem is None
-    assert len(worker_threads) == 2
+    assert patched.problem is None
+    assert len(worker_threads) == 3
     assert all(thread != caller_thread for thread in worker_threads)
 
 

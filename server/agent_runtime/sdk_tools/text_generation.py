@@ -15,7 +15,7 @@ from server.agent_runtime.sdk_tools._context import (
     tool_outcome_response,
     tool_services,
 )
-from server.draft_workflow import DiscardDraftRequest, DraftLocator, PatchDraftRequest
+from server.draft_workflow import DiscardDraftRequest, DraftLocator, PatchDraftRequest, PromoteDraftRequest
 from server.text_generation import TextGenerationRequest as ToolTextGenerationRequest
 from server.tool_runtime import (
     ToolOutcome,
@@ -247,15 +247,28 @@ def discard_draft_tool(ctx: ToolContext):
 
 
 def promote_draft_tool(ctx: ToolContext):
+    schema = {
+        **_DRAFT_LOCATOR_SCHEMA,
+        "properties": {
+            **_DRAFT_LOCATOR_SCHEMA["properties"],
+            "base_revision": {"type": "string", "description": "open_draft 返回的当前草稿 revision"},
+        },
+        "required": [*_DRAFT_LOCATOR_SCHEMA["required"], "base_revision"],
+    }
+
     @tool(
         PROMOTE_TOOL_NAME,
         "重新全量校验指定草稿；通过则晋升为正式文件并清除草稿，不通过则刷新违约报告。可反复调用。",
-        _DRAFT_LOCATOR_SCHEMA,
+        schema,
     )
     async def _handler(args: dict[str, Any]) -> dict[str, Any]:
         try:
-            locator = DraftLocator(episode=int(args["episode"]), doc_type=str(args["doc_type"]))
-            outcome = await promote_draft(ToolRequest(locator), ctx.scope, ctx.caller, tool_services(ctx))
+            request = PromoteDraftRequest(
+                episode=int(args["episode"]),
+                doc_type=str(args["doc_type"]),
+                base_revision=str(args["base_revision"]),
+            )
+            outcome = await promote_draft(ToolRequest(request), ctx.scope, ctx.caller, tool_services(ctx))
         except Exception as exc:  # noqa: BLE001
             outcome = ToolOutcome(problem=ToolProblem("invalid_request", str(exc)))
         return _draft_response(outcome)

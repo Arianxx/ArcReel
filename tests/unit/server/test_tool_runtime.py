@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import os
 import threading
 from contextlib import contextmanager
@@ -166,6 +167,28 @@ async def test_patch_episode_script_returns_typed_revision_conflict() -> None:
     assert outcome.value.problems[0].code == "revision_conflict"
     assert projects.load_script_threads
     assert all(thread != caller_thread for thread in projects.load_script_threads)
+
+
+async def test_sync_transaction_finishes_worker_before_propagating_cancellation() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def transaction() -> None:
+        started.set()
+        release.wait(timeout=1)
+        finished.set()
+
+    task = asyncio.create_task(tool_runtime._run_sync_transaction(transaction))
+    assert await asyncio.to_thread(started.wait, 1)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.is_set()
 
 
 def test_text_generation_dependency_points_from_host_adapters_to_shared_handler() -> None:

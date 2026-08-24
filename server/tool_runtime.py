@@ -91,6 +91,7 @@ from server.draft_workflow import (
     DraftWorkflow,
     DraftWorkflowError,
     PatchDraftRequest,
+    PromoteDraftRequest,
 )
 from server.services.video_caps import annotate_reference_unit_tiers
 from server.services.workflow_planner import WorkflowPlanner
@@ -155,6 +156,23 @@ class ToolProblem:
 class ToolOutcome[ResultT]:
     value: ResultT | None = None
     problem: ToolProblem | None = None
+
+
+async def _run_sync_transaction[ResultT](
+    function: Callable[..., ResultT],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> ResultT:
+    worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        try:
+            await worker
+        except Exception:  # noqa: BLE001
+            pass
+        raise
 
 
 class PatchUpdateOperation(BaseModel):
@@ -668,13 +686,19 @@ async def patch_draft(
 
 
 async def promote_draft(
-    request: ToolRequest[DraftLocator],
+    request: ToolRequest[PromoteDraftRequest],
     scope: ProjectScope,
     _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[dict[str, Any]]:
-    locator = request.value
-    return await _run_draft(_draft_workflow(scope, services).promote(locator.episode, locator.doc_type))
+    promotion = request.value
+    return await _run_draft(
+        _draft_workflow(scope, services).promote(
+            promotion.episode,
+            promotion.doc_type,
+            promotion.base_revision,
+        )
+    )
 
 
 async def discard_draft(
@@ -1105,7 +1129,7 @@ async def patch_episode_script(
     _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[ScriptBatchEditResult]:
-    return await asyncio.to_thread(_patch_episode_script_sync, request, scope, services)
+    return await _run_sync_transaction(_patch_episode_script_sync, request, scope, services)
 
 
 MAX_INSTRUCTIONS_LEN = 4000
@@ -1570,10 +1594,9 @@ def _format_upsert(table: str, result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-async def patch_project(
+def _patch_project_sync(
     request: ToolRequest[PatchProjectRequest],
     scope: ProjectScope,
-    _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[PatchProjectResult]:
     value = request.value
@@ -1637,6 +1660,15 @@ async def patch_project(
         return ToolOutcome(problem=_unexpected("patch_project", exc))
 
 
+async def patch_project(
+    request: ToolRequest[PatchProjectRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[PatchProjectResult]:
+    return await _run_sync_transaction(_patch_project_sync, request, scope, services)
+
+
 def _patch_episode_meta_sync(
     request: ToolRequest[PatchEpisodeMetaRequest],
     scope: ProjectScope,
@@ -1664,7 +1696,7 @@ async def patch_episode_meta(
     _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[PatchEpisodeMetaResult]:
-    return await asyncio.to_thread(_patch_episode_meta_sync, request, scope, services)
+    return await _run_sync_transaction(_patch_episode_meta_sync, request, scope, services)
 
 
 async def rename_asset(
@@ -1836,6 +1868,7 @@ __all__ = [
     "DraftLocator",
     "DiscardDraftRequest",
     "PatchDraftRequest",
+    "PromoteDraftRequest",
     "ProjectScope",
     "RenameAssetRequest",
     "ResetEpisodePlanningRequest",
