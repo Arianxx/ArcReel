@@ -439,7 +439,12 @@ def _decode_business_file(project_dir: Path, relative: str) -> tuple[Any, str, s
     return content, revision, etag, len(raw)
 
 
-def _business_file_entries(project_dir: Path) -> list[ProjectFileEntry]:
+def _business_file_entries(
+    project_dir: Path,
+    before_scan: Callable[[], None] | None = None,
+) -> list[ProjectFileEntry]:
+    if before_scan is not None:
+        before_scan()
     candidates = [project_dir / "project.json"]
     for dirname in ("source", "scripts"):
         directory = project_dir / dirname
@@ -526,10 +531,12 @@ async def list_source_files(
     scope: ProjectScope,
     _caller: CallerContext,
     services: Services,
+    *,
+    before_scan: Callable[[], None] | None = None,
 ) -> ToolOutcome[SourceFilesContent]:
     try:
         project_dir = services.projects.get_project_path(scope.project_name)
-        entries = await asyncio.to_thread(_business_file_entries, project_dir)
+        entries = await asyncio.to_thread(_business_file_entries, project_dir, before_scan)
         files = [entry for entry in entries if entry.path.startswith("source/")]
         revision = prefixed_canonical_json_digest([entry.model_dump() for entry in files])
         return ToolOutcome(value=SourceFilesContent(revision=revision, files=files))
@@ -599,9 +606,15 @@ async def list_project_files(
     scope: ProjectScope,
     _caller: CallerContext,
     services: Services,
+    *,
+    before_scan: Callable[[], None] | None = None,
 ) -> ToolOutcome[ProjectFilesContent]:
     try:
-        files = await asyncio.to_thread(_business_file_entries, services.projects.get_project_path(scope.project_name))
+        files = await asyncio.to_thread(
+            _business_file_entries,
+            services.projects.get_project_path(scope.project_name),
+            before_scan,
+        )
         revision = prefixed_canonical_json_digest([entry.model_dump() for entry in files])
         return ToolOutcome(value=ProjectFilesContent(revision=revision, files=files))
     except Exception as exc:  # noqa: BLE001

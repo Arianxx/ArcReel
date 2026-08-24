@@ -138,6 +138,35 @@ async def test_open_draft_returns_existing_draft_without_clobbering(fake_ctx: To
     assert "reference_step1" in out["content"][0]["text"]
 
 
+async def test_open_and_patch_build_response_snapshot_off_event_loop(fake_ctx: ToolContext, monkeypatch) -> None:
+    _rv_source(fake_ctx)
+    _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
+    await _open_for_edit(fake_ctx, source="source/episode_1.txt")
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    original_fingerprint = script_review.content_fingerprint
+
+    def tracked_fingerprint(path):
+        worker_threads.append(threading.get_ident())
+        return original_fingerprint(path)
+
+    monkeypatch.setattr(script_review, "content_fingerprint", tracked_fingerprint)
+    opened = _draft_result(await _open_for_edit(fake_ctx, source="source/episode_1.txt"))
+    patched = await _call(
+        patch_draft_tool(fake_ctx),
+        {
+            "episode": 1,
+            "doc_type": "reference_step1",
+            "content": opened["content"],
+            "base_revision": opened["revision"],
+        },
+    )
+
+    assert patched.get("is_error") is not True, patched
+    assert len(worker_threads) == 2
+    assert all(thread != caller_thread for thread in worker_threads)
+
+
 async def test_open_draft_without_official_file(fake_ctx: ToolContext) -> None:
     """没有正式 step1 时指回首次拆分工具，而不是开一份空草稿让 Agent 手写整集。"""
     _rv_source(fake_ctx)
@@ -194,11 +223,15 @@ async def test_open_draft_rejects_missing_source_without_side_effect(
     from server import draft_workflow as mod
 
     original_to_thread = asyncio.to_thread
-    offloaded: list[str] = []
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
 
     async def observed_to_thread(function, /, *args, **kwargs):
-        offloaded.append(function.__name__)
-        return await original_to_thread(function, *args, **kwargs)
+        def run():
+            worker_threads.append(threading.get_ident())
+            return function(*args, **kwargs)
+
+        return await original_to_thread(run)
 
     monkeypatch.setattr(mod.asyncio, "to_thread", observed_to_thread)
 
@@ -206,7 +239,7 @@ async def test_open_draft_rejects_missing_source_without_side_effect(
 
     assert out.get("is_error") is True
     assert not _rv_quarantine_path(fake_ctx).exists()
-    assert offloaded == ["load_project_readonly", "_load_novel_source"]
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 
 async def test_step1_write_cannot_race_a_step2_draft_patch(fake_ctx: ToolContext) -> None:
@@ -580,11 +613,15 @@ async def test_patch_draft_revision_covers_source_metadata(fake_ctx: ToolContext
         "base_revision": opened["revision"],
     }
     original_to_thread = asyncio.to_thread
-    offloaded: list[str] = []
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
 
     async def observed_to_thread(function, /, *args, **kwargs):
-        offloaded.append(function.__name__)
-        return await original_to_thread(function, *args, **kwargs)
+        def run():
+            worker_threads.append(threading.get_ident())
+            return function(*args, **kwargs)
+
+        return await original_to_thread(run)
 
     monkeypatch.setattr(mod.asyncio, "to_thread", observed_to_thread)
 
@@ -594,7 +631,7 @@ async def test_patch_draft_revision_covers_source_metadata(fake_ctx: ToolContext
     assert first["revision"] != opened["revision"]
     assert stale.get("is_error") is True
     assert "revision_conflict" in stale["content"][0]["text"]
-    assert offloaded == ["load_project_readonly", "_load_novel_source", "load_project_readonly"]
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 
 async def test_discard_draft_rejects_stale_revision(fake_ctx: ToolContext) -> None:

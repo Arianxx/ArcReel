@@ -224,27 +224,21 @@ async def test_upload_source_respects_migration_failure_gate(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize("handler", [list_source_files, list_project_files])
-async def test_file_enumeration_runs_off_event_loop(tmp_path: Path, monkeypatch, handler) -> None:
-    from server import tool_runtime as mod
-
+async def test_file_enumeration_runs_off_event_loop(tmp_path: Path, handler) -> None:
     services = _services(tmp_path)
     services.projects.create_project("demo")
-    offloaded: list[str] = []
-
-    async def run_in_thread(function, /, *args, **kwargs):
-        offloaded.append(function.__name__)
-        return function(*args, **kwargs)
-
-    monkeypatch.setattr(mod.asyncio, "to_thread", run_in_thread)
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
     outcome = await handler(
         ToolRequest(None),
         ProjectScope(project_name="demo", projects_root=services.projects.projects_root),
         CallerContext(user_id="test", source="mcp"),
         services,
+        before_scan=lambda: worker_threads.append(threading.get_ident()),
     )
 
     assert outcome.problem is None
-    assert offloaded == ["_business_file_entries"]
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 
 async def test_filesystem_heavy_mutations_run_off_event_loop(tmp_path: Path, monkeypatch) -> None:

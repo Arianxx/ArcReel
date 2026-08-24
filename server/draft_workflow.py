@@ -955,21 +955,28 @@ class DraftWorkflow:
             )
         return kind
 
-    def _read(self, episode: int, kind: str) -> dict[str, Any]:
+    def _read_if_present(self, episode: int, kind: str) -> dict[str, Any] | None:
         draft = read_quarantine(self.ctx.project_path, episode, kind)
         if draft is not None:
             payload = draft_payload(draft)
             payload["formal_revision"] = script_review.content_fingerprint(self._formal_path(episode, kind))
             return payload
-        detail = f"episode {episode} has no {doc_type_for_kind(kind)} draft"
         if quarantine_exists(self.ctx.project_path, episode, kind):
             detail = f"episode {episode} {doc_type_for_kind(kind)} draft is not a valid JSON envelope"
+            raise DraftWorkflowError("draft_not_found", detail)
+        return None
+
+    def _read(self, episode: int, kind: str) -> dict[str, Any]:
+        payload = self._read_if_present(episode, kind)
+        if payload is not None:
+            return payload
+        detail = f"episode {episode} has no {doc_type_for_kind(kind)} draft"
         raise DraftWorkflowError("draft_not_found", detail)
 
     def _formal_path(self, episode: int, kind: str) -> Path:
         if kind == QUARANTINE_KIND_STEP2:
             return self.ctx.project_path / "scripts" / episode_script_filename(episode)
-        project = self.ctx.pm.load_project(self.ctx.project_name)
+        project = self.ctx.pm.load_project_readonly(self.ctx.project_name)
         path = script_review.step1_path(self.ctx.project_path, project, episode)
         if path is None:
             raise ValueError("project has no formal step1 document")
@@ -981,9 +988,9 @@ class DraftWorkflow:
 
         try:
             async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
-                existing = read_quarantine(self.ctx.project_path, episode, resolved)
-                if existing is not None or quarantine_exists(self.ctx.project_path, episode, resolved):
-                    return self._read(episode, resolved)
+                existing = await asyncio.to_thread(self._read_if_present, episode, resolved)
+                if existing is not None:
+                    return existing
                 if resolved == QUARANTINE_KIND_STEP2:
                     script = await asyncio.to_thread(
                         self.ctx.pm.load_script_readonly,
@@ -1007,11 +1014,62 @@ class DraftWorkflow:
                     )
                 else:
                     await _STEP1_EDIT_OPENERS[resolved](self.ctx, episode, source)
-                return self._read(episode, resolved)
+                return await asyncio.to_thread(self._read, episode, resolved)
         except DraftWorkflowError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise DraftWorkflowError("draft_open_failed", str(exc)) from exc
+
+    def _patch_locked(
+        self,
+        episode: int,
+        resolved: str,
+        content: dict[str, Any],
+        base_revision: str,
+        accept_formal_revision: str | None,
+        accepts_formal_revision: bool,
+        source: str | None,
+        updates_source: bool,
+        before_commit: Callable[[], None] | None,
+    ) -> dict[str, Any]:
+        path = quarantine_path(self.ctx.project_path, episode, resolved)
+        draft = read_quarantine(self.ctx.project_path, episode, resolved)
+        if draft is None:
+            return self._read(episode, resolved)
+        actual_revision = draft_revision(draft)
+        if base_revision != actual_revision:
+            raise DraftWorkflowError(
+                "revision_conflict",
+                f"draft revision changed: expected {base_revision}, actual {actual_revision}",
+            )
+        meta = draft.meta
+        if updates_source:
+            if resolved == QUARANTINE_KIND_STEP2:
+                raise DraftWorkflowError("invalid_request", "source is only valid for step1 drafts")
+            _load_novel_source(self.ctx.project_path, source)
+            meta = {**meta, "source": source}
+        if accepts_formal_revision:
+            actual_formal_revision = script_review.content_fingerprint(self._formal_path(episode, resolved))
+            if accept_formal_revision != actual_formal_revision:
+                raise DraftWorkflowError(
+                    "formal_revision_conflict",
+                    "formal document changed again: "
+                    f"expected {accept_formal_revision}, actual {actual_formal_revision}",
+                )
+            meta = {**meta, "base_fingerprint": actual_formal_revision}
+        if before_commit is not None:
+            before_commit()
+        atomic_write_json(
+            path,
+            {
+                "kind": draft.kind,
+                "episode": draft.episode,
+                "meta": meta,
+                "violations": draft.violations,
+                "content": content,
+            },
+        )
+        return self._read(episode, resolved)
 
     async def patch(
         self,
@@ -1029,43 +1087,18 @@ class DraftWorkflow:
         resolved = await self._kind(episode, doc_type)
         path = quarantine_path(self.ctx.project_path, episode, resolved)
         async with ProjectManager(str(self.ctx.projects_root)).async_file_lock(path):
-            draft = read_quarantine(self.ctx.project_path, episode, resolved)
-            if draft is None:
-                return self._read(episode, resolved)
-            actual_revision = draft_revision(draft)
-            if base_revision != actual_revision:
-                raise DraftWorkflowError(
-                    "revision_conflict",
-                    f"draft revision changed: expected {base_revision}, actual {actual_revision}",
-                )
-            meta = draft.meta
-            if updates_source:
-                if resolved == QUARANTINE_KIND_STEP2:
-                    raise DraftWorkflowError("invalid_request", "source is only valid for step1 drafts")
-                await asyncio.to_thread(_load_novel_source, self.ctx.project_path, source)
-                meta = {**meta, "source": source}
-            if accepts_formal_revision:
-                actual_formal_revision = script_review.content_fingerprint(self._formal_path(episode, resolved))
-                if accept_formal_revision != actual_formal_revision:
-                    raise DraftWorkflowError(
-                        "formal_revision_conflict",
-                        "formal document changed again: "
-                        f"expected {accept_formal_revision}, actual {actual_formal_revision}",
-                    )
-                meta = {**meta, "base_fingerprint": actual_formal_revision}
-            if before_commit is not None:
-                before_commit()
-            atomic_write_json(
-                path,
-                {
-                    "kind": draft.kind,
-                    "episode": draft.episode,
-                    "meta": meta,
-                    "violations": draft.violations,
-                    "content": content,
-                },
+            return await run_sync_transaction(
+                self._patch_locked,
+                episode,
+                resolved,
+                content,
+                base_revision,
+                accept_formal_revision,
+                accepts_formal_revision,
+                source,
+                updates_source,
+                before_commit,
             )
-            return self._read(episode, resolved)
 
     async def promote(
         self,
