@@ -36,7 +36,7 @@ from server.agent_runtime.sdk_tools.text_generation import (
     patch_draft_tool,
     promote_draft_tool,
 )
-from server.draft_workflow import DraftContext, DraftWorkflow
+from server.draft_workflow import DraftContext, DraftWorkflow, DraftWorkflowError
 from server.text_generation import TextGenerationError, TextGenerationRequest, generate_reference_step1
 from tests.integration.server.agent_runtime.sdk_tools.sdk_tools_support import (
     _RV_NOVEL,
@@ -157,7 +157,7 @@ async def test_reference_step1_write_transaction_does_not_block_event_loop(fake_
     def before_commit() -> None:
         worker_threads.append(threading.get_ident())
         started.set()
-        assert release.wait(timeout=2)
+        release.wait()
 
     generation = asyncio.create_task(
         generate_reference_step1(
@@ -168,11 +168,13 @@ async def test_reference_step1_write_transaction_does_not_block_event_loop(fake_
             before_commit=before_commit,
         )
     )
-    assert await asyncio.to_thread(started.wait, 1)
-    ticked = asyncio.Event()
-    asyncio.get_running_loop().call_soon(ticked.set)
-    await asyncio.wait_for(ticked.wait(), timeout=1)
-    release.set()
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        ticked = asyncio.Event()
+        asyncio.get_running_loop().call_soon(ticked.set)
+        await asyncio.wait_for(ticked.wait(), timeout=1)
+    finally:
+        release.set()
 
     result = await generation
 
@@ -216,6 +218,35 @@ async def test_promote_draft_reports_again_without_round_limit(fake_ctx: ToolCon
     _rv_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
     await _promote(fake_ctx)
     assert [v["code"] for v in _read_rv_quarantine(fake_ctx)["violations"]] == ["braces_in_description"]
+
+
+async def test_invalid_promotion_rewrites_draft_off_event_loop(fake_ctx: ToolContext, monkeypatch) -> None:
+    _rv_source(fake_ctx)
+    await _run_rv_split(fake_ctx, monkeypatch, [_rv_unit("@[不存在的人] 出场")])
+    draft = read_quarantine(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP1)
+    assert draft is not None
+    _use_fake_caps(fake_ctx)
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    workflow = DraftWorkflow(
+        DraftContext(
+            project_name=fake_ctx.project_name,
+            projects_root=fake_ctx.projects_root,
+            pm=fake_ctx.pm,
+            config_resolver=fake_ctx.config_resolver,
+        )
+    )
+
+    with pytest.raises(DraftWorkflowError) as excinfo:
+        await workflow.promote(
+            1,
+            "reference_step1",
+            draft_revision(draft),
+            before_invalid_rewrite=lambda: worker_threads.append(threading.get_ident()),
+        )
+
+    assert excinfo.value.code == "draft_invalid"
+    assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 
 async def test_promote_draft_rejects_stale_draft_revision(fake_ctx: ToolContext, monkeypatch) -> None:
@@ -526,7 +557,7 @@ async def test_cancelled_reference_step1_promotion_finishes_commit_and_cleanup(
 
     def before_commit() -> None:
         started.set()
-        assert release.wait(timeout=2)
+        release.wait()
 
     draft = read_quarantine(fake_ctx.project_path, 1, QUARANTINE_KIND_STEP1)
     assert draft is not None
@@ -547,11 +578,13 @@ async def test_cancelled_reference_step1_promotion_finishes_commit_and_cleanup(
             before_commit=before_commit,
         )
     )
-    assert await asyncio.to_thread(started.wait, 1)
-    promotion.cancel()
-    await asyncio.sleep(0)
-    assert not promotion.done()
-    release.set()
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        promotion.cancel()
+        await asyncio.sleep(0)
+        assert not promotion.done()
+    finally:
+        release.set()
 
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(promotion, timeout=1)

@@ -273,10 +273,42 @@ def _open_step1_draft(
         )
 
 
+def _validate_open_source(
+    project_path: Path,
+    source: str,
+    before_validation: Callable[[], None] | None,
+) -> None:
+    if before_validation is not None:
+        before_validation()
+    _load_novel_source(project_path, source)
+
+
+def _rewrite_invalid_draft(
+    project_path: Path,
+    episode: int,
+    kind: str,
+    content: dict[str, Any],
+    violations: list[DraftViolation],
+    meta: dict[str, Any],
+    before_rewrite: Callable[[], None] | None,
+) -> str:
+    if before_rewrite is not None:
+        before_rewrite()
+    return quarantine_and_report(
+        project_path,
+        episode,
+        kind,
+        content=content,
+        violations=violations,
+        meta=meta,
+    )
+
+
 async def _promote_reference_step1(
     ctx: DraftContext,
     episode: int,
     draft: QuarantinedDraft,
+    before_invalid_rewrite: Callable[[], None] | None = None,
     *,
     before_commit: Callable[[], None] | None = None,
 ) -> None:
@@ -297,23 +329,27 @@ async def _promote_reference_step1(
     if revalidation.schema_failed:
         # schema 违约：写回 Agent 手里那份原样内容，不做收编——字段被改坏时收编会把它的原稿
         # 改形，它照着报告回去看反而对不上自己写的东西。
-        report = quarantine_and_report(
+        report = await run_sync_transaction(
+            _rewrite_invalid_draft,
             project_path,
             episode,
             QUARANTINE_KIND_STEP1,
-            content=draft.content,
-            violations=violations,
-            meta=draft.meta,
+            draft.content,
+            violations,
+            draft.meta,
+            before_invalid_rewrite,
         )
         raise DraftWorkflowError("draft_invalid", report)
     if violations:
-        report = quarantine_and_report(
+        report = await run_sync_transaction(
+            _rewrite_invalid_draft,
             project_path,
             episode,
             QUARANTINE_KIND_STEP1,
-            content={"units": flat_units},
-            violations=violations,
-            meta=draft.meta,
+            {"units": flat_units},
+            violations,
+            draft.meta,
+            before_invalid_rewrite,
         )
         raise DraftWorkflowError("draft_invalid", report)
 
@@ -542,7 +578,12 @@ async def revalidate_drama_step1_draft(
     return SingleStep1DraftRevalidation([], content, schema_failed=False, basis=step1_basis)
 
 
-async def _promote_drama_step1(ctx: DraftContext, episode: int, draft: QuarantinedDraft) -> None:
+async def _promote_drama_step1(
+    ctx: DraftContext,
+    episode: int,
+    draft: QuarantinedDraft,
+    before_invalid_rewrite: Callable[[], None] | None = None,
+) -> None:
     """按产出时那套校验器全量重判 drama step1 草稿，通过则晋升为正式 step1 并清除草稿。"""
     project_path = ctx.project_path
     project = await asyncio.to_thread(ctx.pm.load_project_readonly, ctx.project_name)
@@ -560,13 +601,15 @@ async def _promote_drama_step1(ctx: DraftContext, episode: int, draft: Quarantin
     if revalidation.violations:
         # schema 违约时写回 Agent 手里那份原样内容，不做收编——字段被改坏时收编会把它的原稿
         # 改形，它照着报告回去看反而对不上自己写的东西。过了 schema 的那份则回写收编后的内容。
-        report = quarantine_and_report(
+        report = await run_sync_transaction(
+            _rewrite_invalid_draft,
             project_path,
             episode,
             QUARANTINE_KIND_DRAMA_STEP1,
-            content=draft.content if revalidation.schema_failed else revalidation.content,
-            violations=revalidation.violations,
-            meta=draft.meta,
+            draft.content if revalidation.schema_failed else revalidation.content,
+            revalidation.violations,
+            draft.meta,
+            before_invalid_rewrite,
         )
         raise DraftWorkflowError("draft_invalid", report)
 
@@ -602,7 +645,12 @@ async def _promote_drama_step1(ctx: DraftContext, episode: int, draft: Quarantin
         ) from conflict
 
 
-async def _open_drama_step1_for_edit(ctx: DraftContext, episode: int, source: str | None) -> None:
+async def _open_drama_step1_for_edit(
+    ctx: DraftContext,
+    episode: int,
+    source: str | None,
+    before_source_validation: Callable[[], None] | None,
+) -> None:
     """把本集正式 drama step1 取回为草稿（正式文件保持原样），返回给 Agent 的编辑指引。
 
     与参考生视频同一条流程：草稿有无的检查、正式文件的读取、草稿的写入整段在同一把 per-path
@@ -615,7 +663,7 @@ async def _open_drama_step1_for_edit(ctx: DraftContext, episode: int, source: st
     # 会卡在一个自己改不动的死角。校验失败时不落盘，无效参数不留持久副作用。
     if source is not None:
         try:
-            await asyncio.to_thread(_load_novel_source, project_path, source)
+            await asyncio.to_thread(_validate_open_source, project_path, source, before_source_validation)
         except ValueError as exc:
             raise DraftWorkflowError("draft_open_failed", f"❌ {exc}") from exc
 
@@ -734,7 +782,12 @@ def _narration_step1_draft_shape(content: dict[str, Any]) -> dict[str, Any] | No
     return {"segments": list(segments)}
 
 
-async def _promote_narration_step1(ctx: DraftContext, episode: int, draft: QuarantinedDraft) -> None:
+async def _promote_narration_step1(
+    ctx: DraftContext,
+    episode: int,
+    draft: QuarantinedDraft,
+    before_invalid_rewrite: Callable[[], None] | None = None,
+) -> None:
     """按产出时那套校验器全量重判 narration step1 草稿，通过则晋升为正式 step1 并清除草稿。"""
     project_path = ctx.project_path
     project = await asyncio.to_thread(ctx.pm.load_project_readonly, ctx.project_name)
@@ -753,13 +806,15 @@ async def _promote_narration_step1(ctx: DraftContext, episode: int, draft: Quara
     # 它照着报告回去看反而对不上自己写的东西。过了 schema 的那份则回写收编后的内容。
     if revalidation.violations:
         content = draft.content if revalidation.schema_failed else revalidation.content
-        report = quarantine_and_report(
+        report = await run_sync_transaction(
+            _rewrite_invalid_draft,
             project_path,
             episode,
             QUARANTINE_KIND_NARRATION_STEP1,
-            content=content,
-            violations=revalidation.violations,
-            meta=draft.meta,
+            content,
+            revalidation.violations,
+            draft.meta,
+            before_invalid_rewrite,
         )
         raise DraftWorkflowError("draft_invalid", report)
 
@@ -792,7 +847,12 @@ async def _promote_narration_step1(ctx: DraftContext, episode: int, draft: Quara
         raise DraftWorkflowError("formal_revision_conflict", conflict_report) from conflict
 
 
-async def _open_narration_step1_for_edit(ctx: DraftContext, episode: int, source: str | None) -> None:
+async def _open_narration_step1_for_edit(
+    ctx: DraftContext,
+    episode: int,
+    source: str | None,
+    before_source_validation: Callable[[], None] | None,
+) -> None:
     """把本集正式 narration step1 取回为草稿（正式文件保持原样），返回给 Agent 的编辑指引。
 
     与另两条路线同一条流程：草稿有无的检查、正式文件的读取、草稿的写入整段在同一把 per-path 锁
@@ -805,7 +865,7 @@ async def _open_narration_step1_for_edit(ctx: DraftContext, episode: int, source
     # 会卡在一个自己改不动的死角。校验失败时不落盘，无效参数不留持久副作用。
     if source is not None:
         try:
-            await asyncio.to_thread(_load_novel_source, project_path, source)
+            await asyncio.to_thread(_validate_open_source, project_path, source, before_source_validation)
         except ValueError as exc:
             raise DraftWorkflowError("draft_open_failed", f"❌ {exc}") from exc
 
@@ -889,7 +949,12 @@ async def revalidate_step1_draft(
     return Step1DraftRevalidation(single.violations, None if single.schema_failed else single.content)
 
 
-async def _open_reference_step1_for_edit(ctx: DraftContext, episode: int, source: str | None) -> None:
+async def _open_reference_step1_for_edit(
+    ctx: DraftContext,
+    episode: int,
+    source: str | None,
+    before_source_validation: Callable[[], None] | None,
+) -> None:
     """把本集正式参考生视频 step1 取回为草稿（正式文件保持原样），返回给 Agent 的编辑指引。"""
     project_path = ctx.project_path
     # source 在写草稿前校验：草稿一旦落盘就把它记进 meta.source 供晋升重判用，若此刻
@@ -898,7 +963,7 @@ async def _open_reference_step1_for_edit(ctx: DraftContext, episode: int, source
     # 无效参数不留持久副作用。
     if source is not None:
         try:
-            await asyncio.to_thread(_load_novel_source, project_path, source)
+            await asyncio.to_thread(_validate_open_source, project_path, source, before_source_validation)
         except ValueError as exc:
             raise DraftWorkflowError("draft_open_failed", f"❌ {exc}") from exc
 
@@ -920,13 +985,19 @@ async def _open_reference_step1_for_edit(ctx: DraftContext, episode: int, source
     )
 
 
-_STEP1_EDIT_OPENERS: dict[str, Callable[[DraftContext, int, str | None], Awaitable[None]]] = {
+_STEP1_EDIT_OPENERS: dict[
+    str,
+    Callable[[DraftContext, int, str | None, Callable[[], None] | None], Awaitable[None]],
+] = {
     QUARANTINE_KIND_STEP1: _open_reference_step1_for_edit,
     QUARANTINE_KIND_DRAMA_STEP1: _open_drama_step1_for_edit,
     QUARANTINE_KIND_NARRATION_STEP1: _open_narration_step1_for_edit,
 }
 
-_SINGLE_STEP1_PROMOTERS: dict[str, Callable[[DraftContext, int, QuarantinedDraft], Awaitable[None]]] = {
+_SINGLE_STEP1_PROMOTERS: dict[
+    str,
+    Callable[[DraftContext, int, QuarantinedDraft, Callable[[], None] | None], Awaitable[None]],
+] = {
     QUARANTINE_KIND_DRAMA_STEP1: _promote_drama_step1,
     QUARANTINE_KIND_NARRATION_STEP1: _promote_narration_step1,
 }
@@ -1038,6 +1109,7 @@ class DraftWorkflow:
         doc_type: str,
         source: str | None = None,
         *,
+        before_source_validation: Callable[[], None] | None = None,
         before_reference_step2_create: Callable[[], None] | None = None,
         before_snapshot: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
@@ -1057,7 +1129,7 @@ class DraftWorkflow:
                         before_reference_step2_create,
                     )
                 else:
-                    await _STEP1_EDIT_OPENERS[resolved](self.ctx, episode, source)
+                    await _STEP1_EDIT_OPENERS[resolved](self.ctx, episode, source, before_source_validation)
                 return await asyncio.to_thread(self._read, episode, resolved, before_snapshot)
         except DraftWorkflowError:
             raise
@@ -1154,6 +1226,7 @@ class DraftWorkflow:
         base_revision: str,
         *,
         before_commit: Callable[[], None] | None = None,
+        before_invalid_rewrite: Callable[[], None] | None = None,
         before_lock: Callable[[], None] | None = None,
         before_snapshot: Callable[[], None] | None = None,
         before_step2_step1_lock: Callable[[], None] | None = None,
@@ -1179,9 +1252,15 @@ class DraftWorkflow:
                 )
             try:
                 if resolved in _SINGLE_STEP1_PROMOTERS:
-                    await _SINGLE_STEP1_PROMOTERS[resolved](self.ctx, episode, draft)
+                    await _SINGLE_STEP1_PROMOTERS[resolved](self.ctx, episode, draft, before_invalid_rewrite)
                 elif resolved == QUARANTINE_KIND_STEP1:
-                    await _promote_reference_step1(self.ctx, episode, draft, before_commit=before_commit)
+                    await _promote_reference_step1(
+                        self.ctx,
+                        episode,
+                        draft,
+                        before_invalid_rewrite,
+                        before_commit=before_commit,
+                    )
                 else:
                     project = await asyncio.to_thread(self.ctx.pm.load_project_readonly, self.ctx.project_name)
                     if script_review.gate_blocks_step2(self.ctx.project_path, project, episode):

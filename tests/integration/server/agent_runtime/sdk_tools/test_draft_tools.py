@@ -243,31 +243,32 @@ async def test_open_draft_keeps_malformed_non_dict_unit_slot(fake_ctx: ToolConte
 
 async def test_open_draft_rejects_missing_source_without_side_effect(
     fake_ctx: ToolContext,
-    monkeypatch,
 ) -> None:
     """`source` 指向不存在的文件时不落盘草稿：草稿一旦创建就把这个坏路径记进 meta.source，
     晋升时 `_load_novel_source` 会反复报错，而草稿在场又挡住重新取回改正 source，Agent
     会卡在一个自己改不动的死角。校验失败时不产生持久副作用，Agent 改对参数重试即可。"""
     _rv_source(fake_ctx)
     _write_rv_step1(fake_ctx, [_rv_saved_unit("@[张三] 起身")])
-    from server import draft_workflow as mod
-
-    original_to_thread = asyncio.to_thread
     caller_thread = threading.get_ident()
     worker_threads: list[int] = []
+    workflow = DraftWorkflow(
+        DraftContext(
+            project_name=fake_ctx.project_name,
+            projects_root=fake_ctx.projects_root,
+            pm=fake_ctx.pm,
+            config_resolver=fake_ctx.config_resolver,
+        )
+    )
 
-    async def observed_to_thread(function, /, *args, **kwargs):
-        def run():
-            worker_threads.append(threading.get_ident())
-            return function(*args, **kwargs)
+    with pytest.raises(DraftWorkflowError) as excinfo:
+        await workflow.open(
+            1,
+            "reference_step1",
+            source="source/episode_不存在.txt",
+            before_source_validation=lambda: worker_threads.append(threading.get_ident()),
+        )
 
-        return await original_to_thread(run)
-
-    monkeypatch.setattr(mod.asyncio, "to_thread", observed_to_thread)
-
-    out = await _open_for_edit(fake_ctx, source="source/episode_不存在.txt")
-
-    assert out.get("is_error") is True
+    assert excinfo.value.code == "draft_open_failed"
     assert not _rv_quarantine_path(fake_ctx).exists()
     assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 

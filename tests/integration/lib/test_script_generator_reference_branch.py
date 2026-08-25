@@ -929,17 +929,19 @@ async def test_cancelled_step2_quarantine_finishes_without_blocking_event_loop(r
     def before_quarantine_commit() -> None:
         worker_threads.append(threading.get_ident())
         started.set()
-        assert release.wait(timeout=2)
+        release.wait()
 
     generation = asyncio.create_task(generator.generate(episode=1, before_quarantine_commit=before_quarantine_commit))
-    assert await asyncio.to_thread(started.wait, 1)
-    ticked = asyncio.Event()
-    asyncio.get_running_loop().call_soon(ticked.set)
-    await asyncio.wait_for(ticked.wait(), timeout=1)
-    generation.cancel()
-    await asyncio.sleep(0)
-    assert not generation.done()
-    release.set()
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        ticked = asyncio.Event()
+        asyncio.get_running_loop().call_soon(ticked.set)
+        await asyncio.wait_for(ticked.wait(), timeout=1)
+        generation.cancel()
+        await asyncio.sleep(0)
+        assert not generation.done()
+    finally:
+        release.set()
 
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(generation, timeout=1)
