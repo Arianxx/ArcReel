@@ -147,8 +147,8 @@ async def test_create_project_stays_unpublished_until_metadata_is_complete(tmp_p
             services,
         )
     )
-    assert await asyncio.to_thread(started.wait, 1)
     try:
+        assert await asyncio.to_thread(started.wait, 1)
         assert not projects.project_exists("demo")
         listed = await list_projects(ToolRequest(None), caller, services)
         assert listed.value == []

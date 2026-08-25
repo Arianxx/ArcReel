@@ -442,16 +442,19 @@ def _decode_business_file(project_dir: Path, relative: str) -> tuple[Any, str, s
 def _business_file_entries(
     project_dir: Path,
     before_scan: Callable[[], None] | None = None,
+    *,
+    source_only: bool = False,
+    before_read: Callable[[str], None] | None = None,
 ) -> list[ProjectFileEntry]:
     if before_scan is not None:
         before_scan()
-    candidates = [project_dir / "project.json"]
-    for dirname in ("source", "scripts"):
+    candidates = [] if source_only else [project_dir / "project.json"]
+    for dirname in ("source",) if source_only else ("source", "scripts"):
         directory = project_dir / dirname
         if directory.is_dir() and not directory.is_symlink():
             candidates.extend(directory.iterdir())
     drafts = project_dir / "drafts"
-    if drafts.is_dir() and not drafts.is_symlink():
+    if not source_only and drafts.is_dir() and not drafts.is_symlink():
         for episode_dir in drafts.iterdir():
             if episode_dir.is_dir() and not episode_dir.is_symlink() and _EPISODE_DIR_RE.fullmatch(episode_dir.name):
                 candidates.extend(episode_dir.iterdir())
@@ -460,6 +463,8 @@ def _business_file_entries(
     for candidate in candidates:
         try:
             relative = candidate.relative_to(project_dir).as_posix()
+            if before_read is not None:
+                before_read(relative)
             raw, _path = _read_business_file(project_dir, relative)
             etag = prefixed(hashlib.sha256(raw).hexdigest())
             size = len(raw)
@@ -533,11 +538,17 @@ async def list_source_files(
     services: Services,
     *,
     before_scan: Callable[[], None] | None = None,
+    before_read: Callable[[str], None] | None = None,
 ) -> ToolOutcome[SourceFilesContent]:
     try:
         project_dir = services.projects.get_project_path(scope.project_name)
-        entries = await asyncio.to_thread(_business_file_entries, project_dir, before_scan)
-        files = [entry for entry in entries if entry.path.startswith("source/")]
+        files = await asyncio.to_thread(
+            _business_file_entries,
+            project_dir,
+            before_scan,
+            source_only=True,
+            before_read=before_read,
+        )
         revision = prefixed_canonical_json_digest([entry.model_dump() for entry in files])
         return ToolOutcome(value=SourceFilesContent(revision=revision, files=files))
     except Exception as exc:  # noqa: BLE001

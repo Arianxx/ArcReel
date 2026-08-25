@@ -487,7 +487,7 @@ class ScriptGenerator:
         if bad:
             raise ValueError(
                 f"step1 已定分镜时长非法（不在 {sorted(allowed)} 内）: {bad}；"
-                f"当前分辨率与型号下这些时长不可用，请重跑 normalize-drama-script 按当前能力规范化"
+                "当前分辨率与型号下这些时长不可用，请调用 generate_step1 按当前能力规范化"
             )
 
     def _build_drama_step2_prompt(self, content_scenes: list, episode: int) -> str:
@@ -1046,7 +1046,7 @@ class ScriptGenerator:
             if legacy_md.exists():
                 raise FileNotFoundError(
                     f"仅找到结构化前的旧拆分表 {legacy_md}，未找到 {step1_json}；"
-                    f"请重跑 split-reference-video-units 产出结构化 {REFERENCE_VIDEO_STEP1_FILENAME}"
+                    f"请调用 generate_step1 产出结构化 {REFERENCE_VIDEO_STEP1_FILENAME}"
                 )
             raise FileNotFoundError(
                 f"未找到 Step 1 中间文件: {step1_json}；generation_mode=reference_video 期望该文件，"
@@ -1156,7 +1156,7 @@ class ScriptGenerator:
             if legacy_md.exists():
                 raise FileNotFoundError(
                     f"仅找到结构化前的旧拆分表 {legacy_md}，未找到 {step1_json}；"
-                    f"请重跑 split-narration-segments 产出结构化 {narration_json}"
+                    f"请调用 generate_step1 产出结构化 {narration_json}"
                 )
             raise FileNotFoundError(
                 f"未找到 Step 1 中间文件: {step1_json}；content_mode=narration 期望该文件，请先完成分镜拆分"

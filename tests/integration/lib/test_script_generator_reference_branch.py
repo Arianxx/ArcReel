@@ -596,7 +596,7 @@ async def test_reference_step1_legacy_md_prompts_resplit(reference_project: Path
     (drafts / "step1_reference_units.md").write_text("| E1U1 | Shot1(4s) |", encoding="utf-8")
 
     gen = ScriptGenerator(reference_project)
-    with pytest.raises(FileNotFoundError, match="split-reference-video-units"):
+    with pytest.raises(FileNotFoundError, match="generate_step1"):
         await gen.build_prompt(episode=1)
 
 

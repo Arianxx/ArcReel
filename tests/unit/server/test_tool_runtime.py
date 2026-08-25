@@ -189,17 +189,20 @@ async def test_sync_transaction_finishes_worker_before_propagating_cancellation(
         finished.set()
 
     task = asyncio.create_task(run_sync_transaction(transaction))
-    assert await asyncio.to_thread(started.wait, 1)
-    task.cancel()
-    await asyncio.sleep(0)
-    assert not task.done()
-    task.cancel()
-    await asyncio.sleep(0)
-    assert not task.done()
-    release.set()
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1)
 
     with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, timeout=1)
+        await task
     assert finished.is_set()
 
 
@@ -325,8 +328,10 @@ async def test_file_readers_share_a_business_file_allowlist_and_reject_symlinks(
     services = Services(projects=projects, workflow_planner=_Planner(_status()), capabilities=_Capabilities())
     scope = ProjectScope("demo", tmp_path)
     caller = CallerContext(user_id="u1", source="mcp")
+    scanned: list[str] = []
 
-    sources = await list_source_files(ToolRequest(None), scope, caller, services)
+    sources = await list_source_files(ToolRequest(None), scope, caller, services, before_read=scanned.append)
+    source_scan = list(scanned)
     source = await get_source_text(ToolRequest("source/episode_1.txt"), scope, caller, services)
     step1 = await get_step1_content(ToolRequest(1), scope, caller, services)
     files = await list_project_files(ToolRequest(None), scope, caller, services)
@@ -339,6 +344,12 @@ async def test_file_readers_share_a_business_file_allowlist_and_reject_symlinks(
     assert sources.problem is None
     assert sources.value is not None
     assert [entry.path for entry in sources.value.files] == ["source/episode_1.txt", "source/novel.txt"]
+    assert set(source_scan) == {
+        "source/novel.txt",
+        "source/episode_1.txt",
+        "source/directory.txt",
+        "source/linked.txt",
+    }
     assert source.value is not None and source.value.text == "第一集原文"
     assert step1.value is not None and step1.value.content["title"] == "第一集"
     assert files.value is not None

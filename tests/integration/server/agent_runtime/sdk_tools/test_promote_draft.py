@@ -149,6 +149,11 @@ async def test_reference_step1_write_transaction_does_not_block_event_loop(fake_
     from server import text_generation as mod
 
     monkeypatch.setattr(mod.TextGenerator, "create", _rv_generator_returning([_rv_unit("@[张三] 起身")]))
+    baseline_threads: list[int] = []
+
+    def before_baseline_snapshot() -> None:
+        baseline_threads.append(threading.get_ident())
+
     started = threading.Event()
     release = threading.Event()
     caller_thread = threading.get_ident()
@@ -165,6 +170,7 @@ async def test_reference_step1_write_transaction_does_not_block_event_loop(fake_
             project_name=fake_ctx.project_name,
             projects=fake_ctx.pm,
             config_resolver=resolver,
+            before_baseline_snapshot=before_baseline_snapshot,
             before_commit=before_commit,
         )
     )
@@ -179,6 +185,7 @@ async def test_reference_step1_write_transaction_does_not_block_event_loop(fake_
     result = await generation
 
     assert result.message.startswith("✅")
+    assert baseline_threads and all(thread != caller_thread for thread in baseline_threads)
     assert worker_threads and all(thread != caller_thread for thread in worker_threads)
 
 

@@ -115,6 +115,16 @@ def _draft_file_revision(path: Path) -> str | None:
         return None
 
 
+def _generation_baselines(
+    draft_path: Path,
+    formal_path: Path,
+    before_snapshot: Callable[[], None] | None = None,
+) -> tuple[str | None, str | None]:
+    if before_snapshot is not None:
+        before_snapshot()
+    return _draft_file_revision(draft_path), script_review.content_fingerprint(formal_path)
+
+
 def _assert_draft_revision(path: Path, expected: str | None) -> None:
     actual = _draft_file_revision(path)
     if actual != expected:
@@ -575,8 +585,11 @@ async def generate_drama_step1(
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_DRAMA_STEP1)
         step1_path = episode_drafts_dir(project_path, episode) / STEP1_FILENAMES["drama"]
         async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
-            draft_baseline = _draft_file_revision(draft_path)
-            formal_baseline = script_review.content_fingerprint(step1_path)
+            draft_baseline, formal_baseline = await asyncio.to_thread(
+                _generation_baselines,
+                draft_path,
+                step1_path,
+            )
         schema = build_drama_normalized_script_model(supported_durations)
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_name)
         result = await generator.generate(
@@ -1084,6 +1097,7 @@ async def generate_reference_step1(
     project_name: str,
     projects: ProjectManager,
     config_resolver: ConfigResolver,
+    before_baseline_snapshot: Callable[[], None] | None = None,
     before_commit: Callable[[], None] | None = None,
 ) -> TextGenerationResult:
     episode = request.episode
@@ -1141,8 +1155,12 @@ async def generate_reference_step1(
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_STEP1)
         formal_step1_path = script_review.official_reference_step1_path(project_path, episode)
         async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
-            draft_baseline = _draft_file_revision(draft_path)
-            formal_baseline = script_review.content_fingerprint(formal_step1_path)
+            draft_baseline, formal_baseline = await asyncio.to_thread(
+                _generation_baselines,
+                draft_path,
+                formal_step1_path,
+                before_baseline_snapshot,
+            )
         schema = build_reference_units_step1_model(split_caps.durations)
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_name)
         result = await generator.generate(
@@ -1284,8 +1302,11 @@ async def generate_narration_step1(
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_NARRATION_STEP1)
         step1_path = _narration_step1_path(project_path, episode)
         async with ProjectManager(str(project_path.parent)).async_file_lock(draft_path):
-            draft_baseline = _draft_file_revision(draft_path)
-            formal_baseline = script_review.content_fingerprint(step1_path)
+            draft_baseline, formal_baseline = await asyncio.to_thread(
+                _generation_baselines,
+                draft_path,
+                step1_path,
+            )
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_name)
         result = await generator.generate(
             BackendTextGenerationRequest(
